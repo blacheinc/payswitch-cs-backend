@@ -7,8 +7,8 @@ dockerfilePath = "./Dockerfile"
 # Start command (production — no --reload)
 startCommand = "./entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 
-# Railway injects $PORT automatically; healthcheck confirms the app is up
-healthcheckPath = "/v1/health"
+# Health check — the health router is mounted at root, no /v1 prefix
+healthcheckPath = "/health"
 healthcheckTimeout = 120
 
 # Graceful shutdown

@@ -1,15 +1,20 @@
 #!/bin/sh
 
-# Exit immediately if a command exits with a non-zero status
-set -e
-
-# Run database migrations
+# Run database migrations (non-fatal — app should still start)
 echo "Running database migrations..."
-alembic upgrade head
+if alembic upgrade head; then
+    echo "Migrations completed successfully."
+else
+    echo "WARNING: Migrations failed. App will start anyway — check DATABASE_URL."
+fi
 
-# Create/Verify default admin
+# Create/Verify default admin (non-fatal)
 echo "Ensuring default admin user..."
-python scripts/create_superuser.py
+if python scripts/create_superuser.py; then
+    echo "Superuser check completed."
+else
+    echo "WARNING: Superuser script failed. Continuing..."
+fi
 
 # Exec the container's main process (what's set as CMD)
 exec "$@"
