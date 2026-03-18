@@ -1,0 +1,56 @@
+# Environment files (secrets must come from Railway Variables, not baked in)
+.env
+.env.local
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# MyPy / Ruff
+.mypy_cache/
+.ruff_cache/
+
+# Docker volumes / local data
+data/
+postgres_data/
+redis_data/
+azurite_data/
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs / scripts not needed at runtime
+prd_credit_scoring_platform.md
+openapi.json
+azure_deploy_aca.sh

@@ -1,16 +1,10 @@
 [build]
-# Railway auto-detects the Dockerfile
 builder = "DOCKERFILE"
 dockerfilePath = "./Dockerfile"
 
 [deploy]
-# Start command (production — no --reload)
-startCommand = "./entrypoint.sh uvicorn app.main:app --host 0.0.0.0 --port $PORT"
-
-# Health check — the health router is mounted at root, no /v1 prefix
+# No startCommand — Dockerfile ENTRYPOINT + CMD handles it
 healthcheckPath = "/health"
 healthcheckTimeout = 120
-
-# Graceful shutdown
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
