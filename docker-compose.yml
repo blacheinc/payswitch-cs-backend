@@ -1,0 +1,73 @@
+version: '3.9'
+
+services:
+  # ── FastAPI Application ──────────────────────────────────────────────
+  api:
+    build: .
+    ports:
+      - '8000:8000'
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
+    networks:
+      - backend
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: credit_scoring
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ── Redis ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ── Azurite (Azure Storage Emulator) ─────────────────────────────────
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - '10000:10000' # Blob
+      - '10001:10001' # Queue
+      - '10002:10002' # Table
+    volumes:
+      - ./data/azurite:/data
+    networks:
+      - backend
+
+networks:
+  backend:
+    driver: bridge

@@ -1,0 +1,305 @@
+"""Score request schemas – full PRD-compliant input/output schemas."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+from app.schemas.common import BaseSchema
+
+
+# ── Score Request Input (mirrors PRD Section 7.1) ─────────────────────────────
+
+
+class ApplicantAddress(BaseModel):
+    street: str | None = None
+    city: str | None = None
+    region: str | None = None
+    digital_address: str | None = None
+
+
+class ApplicantInfo(BaseModel):
+    full_name: str = Field(min_length=2, max_length=200)
+    date_of_birth: date
+    national_id_type: str = Field(
+        description="ghana_card, voter_id, passport, drivers_license, nhis"
+    )
+    national_id_number: str = Field(max_length=50)
+    gender: str | None = Field(default=None, description="male, female, other")
+    marital_status: str | None = None
+    phone: str = Field(pattern=r"^\+?[0-9]{10,15}$")
+    email: str | None = None
+    address: ApplicantAddress | None = None
+    dependents: int | None = Field(default=None, ge=0, le=20)
+    education_level: str | None = None
+
+
+class EmploymentInfo(BaseModel):
+    status: str | None = Field(
+        default=None,
+        description="employed, self_employed, unemployed, retired, student",
+    )
+    employer_name: str | None = None
+    employer_industry: str | None = None
+    job_title: str | None = None
+    duration_months: int | None = Field(default=None, ge=0)
+    total_work_experience_months: int | None = Field(default=None, ge=0)
+    monthly_income: float | None = Field(default=None, ge=0)
+    income_currency: str = "GHS"
+    income_verification_type: str | None = None
+    other_income: float | None = Field(default=None, ge=0)
+    other_income_source: str | None = None
+
+
+class LoanRequestInfo(BaseModel):
+    amount: float = Field(gt=0)
+    currency: str = "GHS"
+    purpose: str = Field(
+        description="personal, business, education, housing, vehicle, medical, agriculture, debt_consolidation, other"
+    )
+    purpose_description: str | None = Field(default=None, max_length=500)
+    tenure_months: int = Field(ge=1, le=360)
+    collateral_type: str | None = None
+    collateral_value: float | None = Field(default=None, ge=0)
+
+
+class ExistingLoan(BaseModel):
+    lender_name: str | None = None
+    loan_type: str | None = None
+    original_amount: float | None = None
+    outstanding_balance: float | None = None
+    monthly_payment: float | None = None
+    status: str | None = None
+    days_past_due: int | None = None
+
+
+class BankAccount(BaseModel):
+    bank_name: str | None = None
+    account_type: str | None = None
+    average_balance_3m: float | None = None
+    account_age_months: int | None = None
+
+
+class MobileMoneyInfo(BaseModel):
+    active: bool = False
+    providers: list[str] | None = None
+    avg_monthly_inflow: float | None = None
+    avg_monthly_outflow: float | None = None
+    account_age_months: int | None = None
+
+
+class AssetsInfo(BaseModel):
+    owns_property: bool | None = None
+    property_value: float | None = None
+    owns_vehicle: bool | None = None
+    vehicle_value: float | None = None
+    savings_investments: float | None = None
+
+
+class FinancialProfile(BaseModel):
+    existing_loans: list[ExistingLoan] | None = None
+    has_bank_account: bool | None = None
+    bank_accounts: list[BankAccount] | None = None
+    mobile_money: MobileMoneyInfo | None = None
+    has_credit_card: bool | None = None
+    credit_card_utilization: float | None = Field(default=None, ge=0, le=1)
+    monthly_expenses: float | None = None
+    assets: AssetsInfo | None = None
+
+
+class BureauData(BaseModel):
+    bureau_score: int | None = None
+    bureau_provider: str | None = None
+    total_accounts: int | None = None
+    delinquent_accounts: int | None = None
+    oldest_account_months: int | None = None
+    recent_inquiries_6m: int | None = None
+    public_records: int | None = None
+
+
+class TelcoData(BaseModel):
+    account_age_months: int | None = None
+    avg_monthly_spend: float | None = None
+    payment_regularity: str | None = None
+
+
+class SocialSignals(BaseModel):
+    linkedin_profile: bool | None = None
+    professional_associations: int | None = None
+
+
+class AlternativeData(BaseModel):
+    utility_payment_history: str | None = None
+    rent_payment_history: str | None = None
+    telco_data: TelcoData | None = None
+    social_signals: SocialSignals | None = None
+
+
+class ConsentInfo(BaseModel):
+    bureau_check_authorized: bool = True
+    consent_date: date
+    consent_reference: str | None = None
+    data_sharing_authorized: bool | None = None
+
+
+class RequestMetadata(BaseModel):
+    channel: str | None = None
+    product_type: str | None = None
+    branch_code: str | None = None
+    officer_id: str | None = None
+    callback_url: str | None = None
+
+
+class CreateScoreRequestInput(BaseModel):
+    """Full credit score request – matches PRD Section 7.1."""
+
+    reference_id: str | None = Field(default=None, max_length=100)
+    applicant: ApplicantInfo
+    employment: EmploymentInfo | None = None
+    loan_request: LoanRequestInfo
+    financial_profile: FinancialProfile | None = None
+    bureau_data: BureauData | None = None
+    alternative_data: AlternativeData | None = None
+    consent: ConsentInfo
+    metadata: RequestMetadata | None = None
+
+
+# ── Score Response (mirrors PRD Section 7.2) ──────────────────────────────────
+
+
+class ScoreValue(BaseModel):
+    value: int = Field(ge=300, le=850)
+    max_value: int = 850
+    min_value: int = 300
+    percentile: int | None = Field(default=None, ge=1, le=100)
+    risk_category: str
+    risk_category_description: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    data_quality_flag: str | None = None
+
+
+class ScoreComponent(BaseModel):
+    score: int
+    max_score: int
+    weight: float | None = None
+    grade: str | None = None
+
+
+class ScoreComponents(BaseModel):
+    payment_history: ScoreComponent | None = None
+    credit_utilization: ScoreComponent | None = None
+    credit_history_length: ScoreComponent | None = None
+    credit_mix: ScoreComponent | None = None
+    new_credit: ScoreComponent | None = None
+    income_stability: ScoreComponent | None = None
+    debt_burden: ScoreComponent | None = None
+
+
+class RiskFactor(BaseModel):
+    code: str
+    category: str
+    description: str
+    impact: str
+    severity: str
+    detail: str | None = None
+
+
+class Recommendation(BaseModel):
+    type: str
+    message: str
+    priority: str
+
+
+class AffordabilityAssessment(BaseModel):
+    estimated_monthly_payment: float | None = None
+    debt_to_income_current: float | None = None
+    debt_to_income_projected: float | None = None
+    disposable_income: float | None = None
+    affordability_assessment: str | None = None
+    max_recommended_amount: float | None = None
+
+
+class ModelInfo(BaseModel):
+    model_version: str | None = None
+    model_type: str | None = None
+    features_used: int | None = None
+    data_sources: list[str] | None = None
+
+
+class ScoreTimestamps(BaseModel):
+    requested_at: datetime
+    scored_at: datetime | None = None
+    valid_until: datetime | None = None
+
+
+class ScoreError(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class ScoreRequestResponse(BaseModel):
+    """Full score response – matches PRD Section 7.2."""
+
+    request_id: str
+    reference_id: str | None = None
+    status: str
+    score: ScoreValue | None = None
+    score_components: ScoreComponents | None = None
+    risk_factors: list[RiskFactor] | None = None
+    recommendations: list[Recommendation] | None = None
+    affordability: AffordabilityAssessment | None = None
+    model_info: ModelInfo | None = None
+    timestamps: ScoreTimestamps
+    error: ScoreError | None = None
+
+
+# ── Score Request List Item (lighter response) ────────────────────────────────
+
+
+class ScoreRequestSummary(BaseSchema):
+    request_id: str
+    tracking_id: str
+    reference_id: str | None
+    status: str
+    score_value: int | None
+    risk_category: str | None
+    request_source: str
+    created_at: datetime
+    scored_at: datetime | None
+
+
+# ── Outcome / Performance ────────────────────────────────────────────────────
+
+
+class RecordOutcomeRequest(BaseModel):
+    decision: str = Field(description="approved, declined, referred")
+    approved_amount: float | None = None
+    approved_tenure_months: int | None = None
+    interest_rate: float | None = None
+    decline_reason: str | None = None
+    decision_notes: str | None = None
+    decision_date: date | None = None
+
+
+class RecordPerformanceRequest(BaseModel):
+    status: str = Field(
+        description="current, past_due_30, past_due_60, past_due_90, default, paid_off, write_off"
+    )
+    days_past_due: int | None = None
+    outstanding_balance: float | None = None
+    as_of_date: date
+
+
+class OutcomeResponse(BaseModel):
+    message: str = "Decision recorded successfully"
+    request_id: str
+    decision: str
+
+
+class PerformanceResponse(BaseModel):
+    message: str = "Performance data recorded"
+    request_id: str
