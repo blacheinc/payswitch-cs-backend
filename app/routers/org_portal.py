@@ -93,8 +93,29 @@ async def invite_user(
 ) -> OrgUserResponse:
     """Invite a new user to the organization."""
     existing = await db.execute(select(OrgUser).where(OrgUser.email == body.email))
-    if existing.scalar_one_or_none():
-        raise ConflictError(f"User with email '{body.email}' already exists")
+    existing_user = existing.scalar_one_or_none()
+
+    if existing_user:
+        if existing_user.status != OrgUserStatus.REMOVED:
+            raise ConflictError(f"User with email '{body.email}' already exists")
+
+        # Re-activate previously removed user
+        temp_password = generate_temp_password()
+        existing_user.organization_id = user.organization_id
+        existing_user.name = body.name
+        existing_user.password_hash = hash_password(temp_password)
+        existing_user.role_label = OrgRoleLabel(body.role_label)
+        existing_user.status = OrgUserStatus.ACTIVE
+        existing_user.email_verification_token = generate_email_verification_token()
+        existing_user.totp_secret = None
+        existing_user.totp_enabled = False
+        await db.flush()
+        email_service.send_invite_email(
+            to_email=existing_user.email,
+            temp_password=temp_password,
+            callback_url=body.callback_url,
+        )
+        return OrgUserResponse.model_validate(existing_user)
 
     temp_password = generate_temp_password()
     new_user = OrgUser(
