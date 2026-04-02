@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,6 +17,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.api_key import ApiKey
     from app.models.organization import Organization
+    from app.models.scoring_result import ScoringResult
     from app.models.user import OrgUser
 
 
@@ -96,6 +98,10 @@ class ScoreRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     decision: Mapped["ScoreDecision | None"] = relationship(
         back_populates="score_request", uselist=False
     )
+    scoring_result: Mapped["ScoringResult | None"] = relationship(
+        back_populates="score_request", uselist=False,
+        foreign_keys="ScoringResult.score_request_id"
+    )
     loan_performances: Mapped[list["LoanPerformance"]] = relationship(
         back_populates="score_request"
     )
@@ -105,10 +111,17 @@ class ScoreRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 class DecisionType(str, enum.Enum):
+    APPROVE = "APPROVE"
+    CONDITIONAL_APPROVE = "CONDITIONAL_APPROVE"
+    REFER = "REFER"
+    DECLINE = "DECLINE"
+    FRAUD_HOLD = "FRAUD_HOLD"
+    ERROR = "ERROR"
+    PENDING = "PENDING"
+    # Legacy values kept for backward compat with existing data
     APPROVED = "approved"
     DECLINED = "declined"
     REFERRED = "referred"
-    PENDING = "pending"
 
 
 class ScoreDecision(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -54,6 +54,9 @@ class ModelVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     training_upload_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("training_uploads.id"), index=True
     )
+    training_id: Mapped[str | None] = mapped_column(
+        String(100), index=True, comment="AI pipeline training run ID, e.g. TRAIN-20260325-163000"
+    )
     data_source: Mapped[str | None] = mapped_column(String(200))
     mlflow_run_id: Mapped[str | None] = mapped_column(String(200))
     training_duration_seconds: Mapped[float | None] = mapped_column(Float)

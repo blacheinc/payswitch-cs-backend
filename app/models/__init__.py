@@ -17,5 +17,6 @@ from app.models.score_request import (
     ScoreDecision,
     ScoreRequest,
 )  # noqa: F401
+from app.models.scoring_result import ScoringResult  # noqa: F401
 from app.models.user import AdminUser, OrgUser  # noqa: F401
 from app.models.webhook import WebhookConfig, WebhookDelivery  # noqa: F401

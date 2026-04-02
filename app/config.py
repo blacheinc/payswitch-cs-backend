@@ -72,6 +72,21 @@ class Settings(BaseSettings):
     azure_servicebus_queue_scoring: str = "scoring-jobs"
     azure_servicebus_queue_webhooks: str = "webhook-deliveries"
 
+    # Service Bus topics and subscriptions (new ML pipeline contract)
+    azure_servicebus_topic_training_started: str = "model-training-started"
+    azure_servicebus_topic_training_completed: str = "model-training-completed"
+    azure_servicebus_topic_scoring_complete: str = "scoring-complete"
+    # BE → DE: stub topic for triggering scoring (swap once DE team confirms)
+    azure_servicebus_topic_score_applicant: str = "score-applicant"
+    azure_servicebus_sub_backend: str = "backend-sub"
+    azure_servicebus_sub_cs_backend: str = "cs-backend"
+
+    # ── XDS Credit Bureau ────────────────────────────────────────────────────
+    xds_username: str = ""
+    xds_password: str = ""
+    xds_base_url: str = "https://www.online.xdsdata.com/XdsDataRestApi/Api"
+    xds_timeout_seconds: int = 30
+
     # ── JWT ───────────────────────────────────────────────────────────────────
     jwt_secret_key: str = "CHANGE-ME-in-production-use-keyvault"
     jwt_algorithm: str = "HS256"

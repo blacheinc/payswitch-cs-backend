@@ -22,6 +22,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -145,6 +146,15 @@ class TrainingUpload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     file_metadata: Mapped[dict | None] = mapped_column(JSONB)
     record_count: Mapped[int | None] = mapped_column(Integer)
     valid_record_count: Mapped[int | None] = mapped_column(Integer)
+
+    # ML pipeline fields
+    training_id: Mapped[str | None] = mapped_column(
+        String(100), index=True,
+        comment="AI pipeline training run ID, e.g. TRAIN-20260325-163000"
+    )
+    models_to_train: Mapped[list | None] = mapped_column(
+        JSONB, comment="List of models requested for training"
+    )
 
     # Mapping stats
     features_mapped: Mapped[int | None] = mapped_column(Integer)

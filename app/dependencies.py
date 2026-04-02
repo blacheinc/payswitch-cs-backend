@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -197,51 +197,26 @@ async def get_auth_context(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None, Depends(optional_bearer)
     ],
-    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
-    """Resolve authentication from either API key or JWT bearer token.
+    """Resolve authentication from Authorization: Bearer <token>.
 
-    Priority: X-API-Key header > Authorization Bearer token.
+    The bearer value can be either a JWT (dashboard login) or an API key
+    (programmatic integration). JWT is tried first; if decode fails, the
+    value is looked up as an API key.
     """
-    # Try API Key first
-    if x_api_key:
-        key_hash = hash_api_key(x_api_key)
-        result = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
-        api_key = result.scalar_one_or_none()
+    if not credentials:
+        raise AuthenticationError("Authorization header required")
 
-        if api_key is None or api_key.status != ApiKeyStatus.ACTIVE:
-            raise AuthenticationError("Invalid or revoked API key")
+    token = credentials.credentials
 
-        # Load organization
-        org_result = await db.execute(
-            select(Organization).where(Organization.id == api_key.organization_id)
-        )
-        org = org_result.scalar_one_or_none()
-        if org is None or org.status == OrgStatus.SUSPENDED:
-            raise OrganizationSuspendedError()
-        if org.status != OrgStatus.ACTIVE:
-            raise AuthenticationError("Organization is not active")
+    # ── 1. Try JWT decode ────────────────────────────────────────────────
+    try:
+        payload = decode_token(token)
+    except Exception:
+        payload = None
 
-        # Update last_used_at (fire and forget)
-        from app.db.base import utcnow
-
-        api_key.last_used_at = utcnow()
-
-        return AuthContext(
-            user_type="api_key",
-            organization_id=org.id,
-            organization=org,
-            api_key=api_key,
-        )
-
-    # Try JWT Bearer
-    if credentials:
-        try:
-            payload = decode_token(credentials.credentials)
-        except Exception:
-            raise AuthenticationError("Invalid or expired token")
-
+    if payload and payload.get("type") == "access":
         user_type = payload.get("user_type")
         user_id = payload.get("sub")
 
@@ -280,7 +255,35 @@ async def get_auth_context(
                 role=admin.role.value if admin.role else None,
             )
 
-    raise AuthenticationError("Authentication required (API key or Bearer token)")
+    # ── 2. Try as API key ────────────────────────────────────────────────
+    key_hash = hash_api_key(token)
+    result = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
+    api_key = result.scalar_one_or_none()
+
+    if api_key is not None and api_key.status == ApiKeyStatus.ACTIVE:
+        # Load organization
+        org_result = await db.execute(
+            select(Organization).where(Organization.id == api_key.organization_id)
+        )
+        org = org_result.scalar_one_or_none()
+        if org is None or org.status == OrgStatus.SUSPENDED:
+            raise OrganizationSuspendedError()
+        if org.status != OrgStatus.ACTIVE:
+            raise AuthenticationError("Organization is not active")
+
+        # Update last_used_at
+        from app.db.base import utcnow
+
+        api_key.last_used_at = utcnow()
+
+        return AuthContext(
+            user_type="api_key",
+            organization_id=org.id,
+            organization=org,
+            api_key=api_key,
+        )
+
+    raise AuthenticationError("Invalid or expired token / API key")
 
 
 # ── Rate Limiting Dependency ──────────────────────────────────────────────────

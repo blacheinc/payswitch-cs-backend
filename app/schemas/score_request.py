@@ -303,3 +303,111 @@ class OutcomeResponse(BaseModel):
 class PerformanceResponse(BaseModel):
     message: str = "Performance data recorded"
     request_id: str
+
+
+# ── Scoring Result (4-model AI pipeline output) ──────────────────────────────
+
+
+class ShapContribution(BaseModel):
+    """A single SHAP feature contribution from the AI pipeline."""
+
+    feature: str
+    value: float
+    direction: str  # "positive" or "negative"
+
+
+class CreditRiskResult(BaseModel):
+    """Credit risk model output from the AI pipeline."""
+
+    probability_of_default: float | None = Field(default=None, ge=0, le=1)
+    pd_confidence: float | None = Field(default=None, ge=0, le=1)
+    risk_tier: str | None = None  # LOW / MEDIUM / HIGH
+    shap_contributions: list[ShapContribution] | None = None
+    decision_reason_codes: list[str] | None = None  # R01, R06, etc.
+    model_version: str | None = None
+
+
+class FraudDetectionResult(BaseModel):
+    """Fraud detection model output from the AI pipeline."""
+
+    fraud_anomaly_score: float | None = Field(default=None, ge=0, le=1)
+    fraud_risk_flag: str | None = None  # LOW / MEDIUM / HIGH
+    model_version: str | None = None
+
+
+class LoanAmountResult(BaseModel):
+    """Loan amount model output from the AI pipeline (Phase 2, nullable)."""
+
+    recommended_amount_ghs: float | None = None
+    recommended_loan_tier: str | None = None  # SMALL / MEDIUM / LARGE
+    model_version: str | None = None
+
+
+class IncomeVerificationResult(BaseModel):
+    """Income verification model output from the AI pipeline (Phase 2, nullable)."""
+
+    income_tier: int | None = Field(default=None, ge=0, le=3)
+    income_tier_label: str | None = None  # LOWER / LOWER_MID / UPPER_MID / UPPER
+    income_confidence: float | None = Field(default=None, ge=0, le=1)
+    model_version: str | None = None
+
+
+class ScoringMetadata(BaseModel):
+    """Metadata passed through from DE via AI pipeline."""
+
+    credit_score: int | None = None
+    score_grade: str | None = None  # A-F
+    data_quality_score: float | None = None
+    bureau_hit_status: str | None = None  # HIT / NO_RECORD
+    product_source: str | None = None  # "45+49" / "45" / "49"
+    applicant_age_at_application: int | None = None
+    credit_age_months_at_application: int | None = None
+
+
+class ScoringResultResponse(BaseModel):
+    """Full scoring result from the AI pipeline — shown to loan officers."""
+
+    request_id: str
+    scoring_timestamp: datetime | None = None
+    decision: str  # APPROVE / CONDITIONAL_APPROVE / REFER / DECLINE / FRAUD_HOLD / ERROR
+    condition_applied: list[str] | None = None  # CA-01 through CA-06
+
+    credit_risk: CreditRiskResult | None = None
+    fraud_detection: FraudDetectionResult | None = None
+    loan_amount: LoanAmountResult | None = None
+    income_verification: IncomeVerificationResult | None = None
+
+    scoring_metadata: ScoringMetadata | dict[str, Any] | None = None
+    errors: list[str] | None = None  # Only for ERROR decisions
+
+
+class HardStopDeclineResponse(BaseModel):
+    """Response when an applicant is immediately declined by hard-stop rules."""
+
+    request_id: str
+    status: str = "DECLINED"
+    decision: str = "DECLINE"
+    decline_reasons: list[str]
+    triggered_rules: list[str]
+
+
+class OverrideDecisionRequest(BaseModel):
+    """Manual decision override for REFER cases."""
+
+    decision: str = Field(
+        description="APPROVE, CONDITIONAL_APPROVE, or DECLINE"
+    )
+    override_reason: str = Field(min_length=5, max_length=1000)
+    conditions: list[str] | None = None
+    approved_amount: float | None = None
+    approved_tenure_months: int | None = None
+
+
+class OverrideDecisionResponse(BaseModel):
+    """Response after manual decision override."""
+
+    message: str = "Decision overridden successfully"
+    request_id: str
+    previous_decision: str
+    new_decision: str
+    overridden_by: str | None = None

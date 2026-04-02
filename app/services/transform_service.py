@@ -177,13 +177,13 @@ def transform_data(
         "duplicate_rows": duplicate_count,
         "type_errors": type_errors[:50],  # Cap at 50
         "type_error_count": len(type_errors),
-        "completeness": round(len(output_columns) / 18, 4),
+        "completeness": round(len(output_columns) / 30, 4),
         "has_target_variable": has_target_variable,
     }
 
     # Quality score: weighted composite
     avg_nulls = sum(null_percentages.values()) / max(len(null_percentages), 1)
-    completeness = len(output_columns) / 18
+    completeness = len(output_columns) / 30
     error_rate = min(len(type_errors) / max(total_rows, 1), 1.0)
     quality_score = round(
         max(0.0, completeness * 0.4 + (1 - avg_nulls) * 0.3 + (1 - error_rate) * 0.3),

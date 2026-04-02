@@ -36,25 +36,25 @@ async def lifespan(app: FastAPI):
 
     # Start subscribers
     from app.core.events import get_event_publisher
-    from app.subscribers.ingestion import handle_data_ingested
+    from app.subscribers.scoring_complete import handle_scoring_complete
     from app.subscribers.training import handle_model_training_completed
     from app.subscribers.training_started import handle_model_training_started
 
     event_publisher = get_event_publisher()
     event_publisher.subscribe(
-        topic_name="data-ingested",
-        subscription_name="cs-backend",
-        handler=handle_data_ingested,
-    )
-    event_publisher.subscribe(
-        topic_name="model-training-started",
-        subscription_name="cs-backend",
+        topic_name=settings.azure_servicebus_topic_training_started,
+        subscription_name=settings.azure_servicebus_sub_cs_backend,
         handler=handle_model_training_started,
     )
     event_publisher.subscribe(
-        topic_name="model-training-completed",
-        subscription_name="cs-backend",
+        topic_name=settings.azure_servicebus_topic_training_completed,
+        subscription_name=settings.azure_servicebus_sub_cs_backend,
         handler=handle_model_training_completed,
+    )
+    event_publisher.subscribe(
+        topic_name=settings.azure_servicebus_topic_scoring_complete,
+        subscription_name=settings.azure_servicebus_sub_backend,
+        handler=handle_scoring_complete,
     )
 
     yield
@@ -121,6 +121,10 @@ def create_app() -> FastAPI:
     app.include_router(admin_training_data_router)
     app.include_router(admin_sources_router)
     app.include_router(score_requests_router)
+
+    from app.routers.bureau_lookup import router as bureau_lookup_router
+    app.include_router(bureau_lookup_router)
+
     app.include_router(profile_router)
     app.include_router(users_router)
     app.include_router(api_keys_router)
