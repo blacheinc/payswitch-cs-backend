@@ -111,6 +111,9 @@ class FinancialProfile(BaseModel):
 
 
 class BureauData(BaseModel):
+    # Returned by the bureau-lookup endpoint — must be forwarded in the score request
+    # so the backend can retrieve cached XDS data for hard-stop evaluation.
+    consumer_id: str | None = None
     bureau_score: int | None = None
     bureau_provider: str | None = None
     total_accounts: int | None = None

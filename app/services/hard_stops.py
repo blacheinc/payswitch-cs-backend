@@ -9,7 +9,7 @@ Hard-stop conditions:
 3. Identity confidence < 0.70 (KYC fail)
 4. Court judgement present
 5. Written-off account within 36 months
-6. Delinquency rating = 4 within 12 months
+6. Delinquency rating = 4 (worst category) within 12 months
 7. 3+ accounts simultaneously in arrears
 """
 
@@ -82,18 +82,19 @@ def evaluate_hard_stops(
     if has_written_off_36m:
         result.fail("HS-05", "Written-off account within 36 months")
 
-    # ── Rule 6: Delinquency rating >= 3 ("very poor") within 12 months ────
-    # XDS returns a string number: "0"=good, "1"=fair, "2"=poor, "3"=very poor, "4"=worst
+    # ── Rule 6: Delinquency rating = 4 ("Very Poor") within 12 months ──────
+    # XDS returns either a numeric string ("0"-"4") or the text values documented
+    # in the XDS API: "Good", "Fairly Good", "Poor", "Very Poor".
+    # Only the worst category — numeric 4 / text "Very Poor" — triggers a hard stop.
     delinquency_rating = bureau.get("delinquency_rating", "")
     if delinquency_rating:
+        rating_str = str(delinquency_rating).strip()
         try:
-            rating_num = int(str(delinquency_rating).strip())
-            if rating_num >= 3:
-                result.fail("HS-06", f"Delinquency rating is {rating_num} (>= 3, very poor)")
+            if int(rating_str) == 4:
+                result.fail("HS-06", f"Delinquency rating is {rating_str} (Very Poor / worst)")
         except (ValueError, TypeError):
-            # Also handle legacy text format
-            if str(delinquency_rating).lower() == "very poor":
-                result.fail("HS-06", "Delinquency rating is 'Very Poor'")
+            if rating_str.lower() == "very poor":
+                result.fail("HS-06", "Delinquency rating is 'Very Poor' (worst category)")
 
     # ── Rule 7: 3+ accounts simultaneously in arrears ───────────────────
     accounts_in_arrear = bureau.get("total_accounts_in_arrear", 0)

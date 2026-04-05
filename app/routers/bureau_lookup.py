@@ -128,7 +128,7 @@ async def bureau_lookup(
     # Extract structured data from reports
     personal = _extract_personal_details(p45_report, primary_match)
     credit_summary = _extract_credit_summary(p45_report)
-    credit_accounts = _extract_credit_accounts(p45_report)
+    credit_accounts = _extract_credit_accounts(p45_report, p49_report)
     features = _extract_features(p45_report, p49_report, body.date_of_birth)
 
     applicant_age = _compute_age(body.date_of_birth)
@@ -233,14 +233,23 @@ def _extract_credit_summary(p45: dict[str, Any]) -> BureauCreditSummary | None:
     )
 
 
-def _extract_credit_accounts(p45: dict[str, Any]) -> list[BureauCreditAccount]:
-    """Extract individual credit accounts from Product 45."""
-    accounts_raw = p45.get("creditAgreementSummary", [])
-    if not isinstance(accounts_raw, list):
-        return []
+def _extract_credit_accounts(
+    p45: dict[str, Any], p49: dict[str, Any] | None = None
+) -> list[BureauCreditAccount]:
+    """Extract individual credit accounts from Products 45 and 49.
 
-    accounts = []
-    for acct in accounts_raw:
+    Product 45 stores accounts in ``creditAgreementSummary[]``.
+    Product 49 stores accounts in ``detailedFacilityInfo[]``.
+    Both use the same field names (accountNo, accountStatusCode, etc.).
+    """
+    accounts: list[BureauCreditAccount] = []
+
+    # ── Product 45 accounts (creditAgreementSummary) ────────────────────
+    p45_accounts = p45.get("creditAgreementSummary", [])
+    if not isinstance(p45_accounts, list):
+        p45_accounts = []
+
+    for acct in p45_accounts:
         if not isinstance(acct, dict):
             continue
         # Get payment history if available
@@ -272,6 +281,39 @@ def _extract_credit_accounts(p45: dict[str, Any]) -> list[BureauCreditAccount]:
             )
         )
 
+    # ── Product 49 accounts (detailedFacilityInfo) ──────────────────────
+    if p49:
+        p49_accounts = p49.get("detailedFacilityInfo", [])
+        if not isinstance(p49_accounts, list):
+            p49_accounts = []
+
+        # Avoid duplicates: track account numbers already added from P45
+        seen_account_nos = {a.account_no for a in accounts if a.account_no}
+
+        for acct in p49_accounts:
+            if not isinstance(acct, dict):
+                continue
+            acct_no = acct.get("accountNo")
+            if acct_no in seen_account_nos:
+                continue
+
+            accounts.append(
+                BureauCreditAccount(
+                    subscriber_name=acct.get("subscriberName"),
+                    account_no=acct_no,
+                    date_opened=acct.get("dateAccountOpened"),
+                    facility_type=acct.get("indicatorDescription"),
+                    currency=acct.get("currency"),
+                    credit_limit=_safe_float(acct.get("openingBalanceAmt")),
+                    current_balance=_safe_float(acct.get("currentBalanceAmt")),
+                    instalment_amount=_safe_float(acct.get("instalmentAmount")),
+                    arrear_amount=_safe_float(acct.get("amountOverdue")),
+                    months_in_arrears=_safe_int(acct.get("monthsInArrears")),
+                    status_code=acct.get("accountStatusCode"),
+                    payment_history_24m=None,  # P49 has no payment history
+                )
+            )
+
     return accounts
 
 
@@ -283,58 +325,109 @@ def _extract_features(
     Note: In the full pipeline, the Data Engineer handles binning.
     This provides a preliminary feature extraction for display and
     for passing to the DE via the score request.
+
+    Product 45 stores accounts in ``creditAgreementSummary[]``.
+    Product 49 stores accounts in ``detailedFacilityInfo[]``.
+    Both use the same field names for account-level data.
     """
+    # ── Summary data (prefer P45, fall back to P49) ─────────────────────
     summary = p45.get("creditAccountSummary", p45.get("creditAccountSummaryGHS", {}))
     if isinstance(summary, list) and summary:
         summary = summary[0]
     elif not isinstance(summary, dict):
         summary = {}
 
-    delinquency_obj = p45.get("highestDelinquencyRating", {})
+    # P49 summary uses different field names (no GHS suffix, typos like "God")
+    p49_summary = p49.get("creditAccountSummary", {}) if p49 else {}
+    if isinstance(p49_summary, list) and p49_summary:
+        p49_summary = p49_summary[0]
+    elif not isinstance(p49_summary, dict):
+        p49_summary = {}
+
+    delinquency_obj = p45.get("highestDelinquencyRating") or (
+        p49.get("highestDelinquencyRating") if p49 else None
+    ) or {}
     if isinstance(delinquency_obj, list) and delinquency_obj:
         delinquency_obj = delinquency_obj[0]
     elif not isinstance(delinquency_obj, dict):
         delinquency_obj = {}
 
-    accounts_raw = p45.get("creditAgreementSummary", [])
-    if not isinstance(accounts_raw, list):
-        accounts_raw = []
+    # ── Combine all accounts from both products ─────────────────────────
+    # P45: creditAgreementSummary[], P49: detailedFacilityInfo[]
+    accounts_raw: list[dict[str, Any]] = []
+    p45_accounts = p45.get("creditAgreementSummary", [])
+    if isinstance(p45_accounts, list):
+        accounts_raw.extend(a for a in p45_accounts if isinstance(a, dict))
+    p49_accounts = (p49.get("detailedFacilityInfo", []) if p49 else [])
+    if isinstance(p49_accounts, list):
+        accounts_raw.extend(a for a in p49_accounts if isinstance(a, dict))
 
     personal = p45.get("personalDetailsSummary", p45.get("personalDetails", {}))
     if isinstance(personal, list) and personal:
         personal = personal[0]
     elif not isinstance(personal, dict):
         personal = {}
+    # Fall back to P49 personal details for identity
+    if not personal.get("nationalIDNo") and p49:
+        p49_personal = p49.get("personalDetailsSummary", p49.get("personalDetails", {}))
+        if isinstance(p49_personal, list) and p49_personal:
+            p49_personal = p49_personal[0]
+        if isinstance(p49_personal, dict) and p49_personal.get("nationalIDNo"):
+            personal = p49_personal
 
     # Compute raw values (pre-binning — DE will re-bin these properly)
-    total_accounts = _safe_int(summary.get("totalNumberofAccountsGHS")) or 0
-    good_accounts = _safe_int(summary.get("totalaccountinGoodconditionGHS")) or 0
-    arrear_accounts = _safe_int(summary.get("totalAccountInArrearGHS")) or 0
-    total_debt = _safe_float(summary.get("totalOutstandingdebtGHS")) or 0
-    total_arrear = _safe_float(summary.get("totalAmountInArrearGHS")) or 0
-    total_instalment = _safe_float(summary.get("totalMonthlyInstalmentGHS")) or 0
+    # Use P45 summary fields first, fall back to P49 where P45 is empty.
+    total_accounts = (
+        _safe_int(summary.get("totalNumberofAccountsGHS"))
+        or _safe_int(p49_summary.get("totalNumberofAccountsGHS"))
+        or 0
+    )
+    good_accounts = (
+        _safe_int(summary.get("totalaccountinGoodconditionGHS"))
+        or _safe_int(p49_summary.get("totalaccountinGodcondition"))
+        or 0
+    )
+    arrear_accounts = (
+        _safe_int(summary.get("totalAccountInArrearGHS"))
+        or _safe_int(p49_summary.get("totalAccountarrear"))
+        or 0
+    )
+    total_debt = (
+        _safe_float(summary.get("totalOutstandingdebtGHS"))
+        or _safe_float(p49_summary.get("totalOutstandingdebt"))
+        or 0
+    )
+    total_arrear = (
+        _safe_float(summary.get("totalAmountInArrearGHS"))
+        or _safe_float(p49_summary.get("amountarrear"))
+        or 0
+    )
+    total_instalment = (
+        _safe_float(summary.get("totalMonthlyInstalmentGHS"))
+        or _safe_float(p49_summary.get("totalMonthlyInstalment"))
+        or 0
+    )
     judgements = _safe_int(summary.get("totalNumberofJudgementGHS")) or 0
     bounced = _safe_int(summary.get("totalNumberofDishonouredGHS")) or 0
 
-    # Check account statuses
+    # Check account statuses across BOTH products
     has_written = any(
         a.get("accountStatusCode") == "W"
         for a in accounts_raw
-        if isinstance(a, dict)
     )
     has_charged = any(
         a.get("accountStatusCode") == "G"
         for a in accounts_raw
-        if isinstance(a, dict)
     )
     has_legal = any(
         a.get("accountStatusCode") == "L"
         for a in accounts_raw
-        if isinstance(a, dict)
     )
 
     # XDS docs specify text values: "Good", "Fairly Good", "Poor", "Very Poor"
-    # Real API may also return numeric: "0"=good, "1"=fair, "2"=poor, "3"=very poor
+    # Real API returns numeric strings: "0" = good through "4" = worst.
+    # Values above 4 (e.g. "10") are per-account delinquency months, not the
+    # categorical rating — default to 0.5 for unrecognised values.
     del_rating_str = str(delinquency_obj.get("highestDelinquencyRating", "")).strip().lower()
     delinquency_map = {
         # Official text values (from XDS API docs v2)
@@ -347,20 +440,38 @@ def _extract_features(
     }
     del_score = delinquency_map.get(del_rating_str, 0.5)
 
-    # Count product types for diversity
+    # Count product types for diversity (both products)
     product_types = set()
     for a in accounts_raw:
-        if isinstance(a, dict) and a.get("indicatorDescription"):
+        if a.get("indicatorDescription"):
             product_types.add(a["indicatorDescription"])
 
     # Defaults / adverse — real API uses "defaults" and "adverseDetails" keys
     defaults_raw = p45.get("defaults", p45.get("adverseDetails", []))
     has_adverse = len(defaults_raw) > 0 if isinstance(defaults_raw, list) else False
 
-    # Enquiry history
+    # Enquiry history — combine both products, deduplicate by ID
     enquiries = p45.get("enquiryHistory", [])
     if not isinstance(enquiries, list):
         enquiries = []
+    p49_enquiries = p49.get("enquiryHistory", []) if p49 else []
+    if isinstance(p49_enquiries, list) and p49_enquiries:
+        seen_ids = {e.get("subscriberEnquiryResultID") for e in enquiries if isinstance(e, dict)}
+        for e in p49_enquiries:
+            if isinstance(e, dict) and e.get("subscriberEnquiryResultID") not in seen_ids:
+                enquiries.append(e)
+
+    # ── Mobile loan features from Product 49 ────────────────────────────
+    mobile_loan_count: float | None = None
+    mobile_max_loan: float | None = None
+    if p49_accounts and isinstance(p49_accounts, list):
+        mobile_accts = [a for a in p49_accounts if isinstance(a, dict)]
+        if mobile_accts:
+            mobile_loan_count = min(len(mobile_accts) / 20, 1.0)
+            max_amt = max(
+                (_safe_float(a.get("openingBalanceAmt")) or 0) for a in mobile_accts
+            )
+            mobile_max_loan = min(max_amt / 5000, 1.0) if max_amt else 0.0
 
     age = _compute_age(dob)
 
@@ -392,8 +503,8 @@ def _extract_features(
         current_streak_on_time=None,
         utilisation_ratio=None,
         credit_age_months=None,
-        mobile_loan_history_count=None,
-        mobile_max_loan_ghs=None,
+        mobile_loan_history_count=mobile_loan_count,
+        mobile_max_loan_ghs=mobile_max_loan,
         enquiry_reason_flags=None,
         address_stability=None,
     )
