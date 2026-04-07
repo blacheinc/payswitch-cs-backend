@@ -72,10 +72,11 @@ async def handle_model_training_completed(message: dict[str, Any]) -> None:
                 model_status_str = model_data.get("status", "unknown")
                 model_metrics = model_data.get("metrics", {})
 
-                # Check for existing version (idempotency)
+                # Check for existing version (idempotency) — keyed on (model_type, version)
                 existing = await db.execute(
                     select(ModelVersion).where(
-                        ModelVersion.version == model_version_str
+                        ModelVersion.model_type == model_type,
+                        ModelVersion.version == model_version_str,
                     )
                 )
                 model_version = existing.scalar_one_or_none()

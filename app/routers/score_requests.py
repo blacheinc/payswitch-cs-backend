@@ -9,9 +9,10 @@ Updated for the async scoring flow:
 
 from __future__ import annotations
 
+import copy
 import logging
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy import func, select
@@ -51,6 +52,164 @@ from app.storage.cache import get_redis_cache
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/score-requests", tags=["Scoring API"])
+
+
+def _build_xds_payload(
+    cached_xds: dict[str, Any],
+    applicant: dict[str, Any] | None,
+    employment: dict[str, Any] | None,
+    financial_profile: dict[str, Any] | None,
+    bureau_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build / patch the XDS-format payload that gets sent to the DE.
+
+    The Data Engineer's feature pipeline reads from a single structure
+    matching the real XDS API shape (``personalDetailsSummary``,
+    ``creditAccountSummary``, ``creditAgreementSummary[]``, etc.).
+
+    * **HIT scenario** – ``cached_xds`` has real bureau data; form values
+      override the specific fields the user is allowed to modify.
+    * **NO_RECORD scenario** – ``cached_xds`` is empty; a synthetic
+      structure is built from the form data so the DE gets the same shape.
+
+    The DE key mapping (from its field-mapping document):
+      45:personalDetailsSummary.birthDate        → applicant_age
+      45:personalDetailsSummary.dependants        → num_dependants
+      45:personalDetailsSummary.employerDetail    → has_employer_detail
+      45:personalDetailsSummary.nationalIDNo      → identity_verified
+      45:creditAccountSummary.*                   → summary-level features
+      45:creditAgreementSummary[]                 → account-level features
+      49:detailedFacilityInfo[]                   → mobile loan features
+      49:creditAccountSummary.highestAmountTaken  → mobile_max_loan_ghs
+    """
+    p45 = copy.deepcopy(cached_xds.get("product_45") or {})
+    p49 = copy.deepcopy(cached_xds.get("product_49") or {})
+
+    # ── personalDetailsSummary (applicant + employment form fields) ──────
+    personal = p45.get("personalDetailsSummary")
+    if not isinstance(personal, dict):
+        personal = p45.get("personalDetails", {})
+    if isinstance(personal, list) and personal:
+        personal = dict(personal[0])
+    elif not isinstance(personal, dict):
+        personal = {}
+
+    if applicant:
+        full_name = applicant.get("full_name", "")
+        if full_name:
+            parts = full_name.strip().split()
+            personal["firstName"] = parts[0]
+            personal["surname"] = parts[-1] if len(parts) > 1 else parts[0]
+            personal["otherNames"] = " ".join(parts[1:-1]) if len(parts) > 2 else ""
+
+        dob = applicant.get("date_of_birth")
+        if dob:
+            # Convert ISO yyyy-mm-dd → XDS dd/mm/yyyy
+            dob_str = str(dob)
+            if len(dob_str) >= 10 and dob_str[4] == "-":
+                personal["birthDate"] = f"{dob_str[8:10]}/{dob_str[5:7]}/{dob_str[:4]}"
+            else:
+                personal["birthDate"] = dob_str
+
+        if applicant.get("national_id_number"):
+            personal["nationalIDNo"] = applicant["national_id_number"]
+        if applicant.get("gender"):
+            personal["gender"] = applicant["gender"].capitalize()
+        if applicant.get("marital_status"):
+            personal["maritalStatus"] = applicant["marital_status"]
+        if applicant.get("phone"):
+            personal["cellularNo"] = applicant["phone"]
+        if applicant.get("email"):
+            personal["emailAddress"] = applicant["email"]
+        if applicant.get("dependents") is not None:
+            personal["dependants"] = str(applicant["dependents"])
+
+        addr = applicant.get("address") or {}
+        if addr.get("street"):
+            personal["residentialAddress1"] = addr["street"]
+        if addr.get("city"):
+            personal["residentialAddress2"] = addr["city"]
+        if addr.get("region"):
+            personal["residentialAddress3"] = addr["region"]
+
+    if employment:
+        if employment.get("employer_name"):
+            personal["employerDetail"] = employment["employer_name"]
+
+    p45["personalDetailsSummary"] = personal
+
+    # ── creditAccountSummary (from bureau_data manual inputs) ───────────
+    summary = p45.get("creditAccountSummary", p45.get("creditAccountSummaryGHS"))
+    if isinstance(summary, list) and summary:
+        summary = dict(summary[0])
+    elif not isinstance(summary, dict):
+        summary = {}
+
+    if bureau_data:
+        if bureau_data.get("total_accounts") is not None:
+            summary["totalNumberofAccountsGHS"] = str(bureau_data["total_accounts"])
+        if bureau_data.get("delinquent_accounts") is not None:
+            summary["totalAccountInArrearGHS"] = str(bureau_data["delinquent_accounts"])
+        if bureau_data.get("public_records") is not None:
+            summary["totalNumberofJudgementGHS"] = str(bureau_data["public_records"])
+
+    # Ensure required keys exist (DE expects these even if "0")
+    summary.setdefault("totalNumberofAccountsGHS", "0")
+    summary.setdefault("totalActiveAccountsGHS", "0")
+    summary.setdefault("totalAccountInArrearGHS", "0")
+    summary.setdefault("totalAmountInArrearGHS", "0.00")
+    summary.setdefault("totalOutstandingdebtGHS", "0.00")
+    summary.setdefault("totalMonthlyInstalmentGHS", "0.00")
+    summary.setdefault("totalaccountinGoodconditionGHS", "0")
+    summary.setdefault("totalNumberofJudgementGHS", "0")
+    summary.setdefault("totalNumberofDishonouredGHS", "0")
+    p45["creditAccountSummary"] = summary
+
+    # ── creditAgreementSummary (from financial_profile existing loans) ───
+    # Only populate if cached XDS didn't already have accounts.
+    if not p45.get("creditAgreementSummary") and financial_profile:
+        existing = financial_profile.get("existing_loans") or []
+        accts = []
+        for loan in existing:
+            if not isinstance(loan, dict):
+                continue
+            status = "A"
+            if loan.get("status") == "paid_off":
+                status = "C"
+            accts.append({
+                "subscriberName": loan.get("lender_name", ""),
+                "accountNo": "",
+                "indicatorDescription": loan.get("loan_type", "Personal cash loan"),
+                "openingBalanceAmt": str(loan.get("original_amount", "0")),
+                "currency": "GHS",
+                "currentBalanceAmt": str(loan.get("outstanding_balance", "0")),
+                "instalmentAmount": str(loan.get("monthly_payment", "0")),
+                "amountOverdue": "0.00",
+                "accountStatusCode": status,
+                "monthsInArrears": str((loan.get("days_past_due") or 0) // 30),
+            })
+        p45["creditAgreementSummary"] = accts
+
+    # ── Ensure remaining P45 structures exist ───────────────────────────
+    p45.setdefault("highestDelinquencyRating", {"highestDelinquencyRating": "0"})
+    p45.setdefault("creditAgreementSummary", [])
+    p45.setdefault("accountMonthlyPaymentHistory", [])
+    p45.setdefault("enquiryHistory", [])
+    p45.setdefault("judgementSummary", [])
+    p45.setdefault("defaults", [])
+    p45.setdefault("adverseDetails", [])
+    p45.setdefault("dudCheqEventSummary", [])
+    p45.setdefault("addressHistory", [])
+
+    # ── P49 structure defaults ──────────────────────────────────────────
+    if p49:
+        p49.setdefault("detailedFacilityInfo", [])
+        p49.setdefault("creditAccountSummary", {})
+
+    return {
+        "product_45": p45,
+        "product_49": p49 or None,
+    }
 
 
 @router.post(
@@ -101,16 +260,146 @@ async def create_score_request(
             today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
         )
 
-    # Extract bureau data for hard-stop evaluation (if provided)
-    bureau_data = {}
+    # Fetch cached XDS data from the bureau-lookup step so we can evaluate
+    # all 7 hard-stop rules. HS-03, HS-05, and HS-06 require fields that
+    # only exist in the raw bureau report, not in the lightweight BureauData body.
+    import json as _json
+    from app.storage.cache import get_redis_cache as _get_redis_cache
+
+    _raw_xds_data: dict = {}
+    consumer_id: str | None = (
+        body.bureau_data.consumer_id if body.bureau_data else None
+    )
+    if consumer_id:
+        try:
+            _cache = _get_redis_cache()
+            _cached_bytes = await _cache._redis.get(f"bureau:{consumer_id}")
+            if _cached_bytes:
+                _raw_xds_data = _json.loads(_cached_bytes)
+        except Exception as _e:
+            logger.warning(f"[scoring] XDS cache fetch failed: {_e}")
+
+    # Build the bureau_data dict for hard-stop evaluation.
+    # Start with whatever the client submitted, then overlay authoritative
+    # values from the cached XDS report where available.
+    bureau_data: dict = {}
     if body.bureau_data:
-        bureau_data = {
-            "total_judgements": body.bureau_data.public_records,
-            "total_accounts_in_arrear": body.bureau_data.delinquent_accounts,
-        }
+        bureau_data["total_judgements"] = body.bureau_data.public_records
+        bureau_data["total_accounts_in_arrear"] = body.bureau_data.delinquent_accounts
+
+    identity_confidence: float | None = None
+
+    if _raw_xds_data:
+        _p45 = _raw_xds_data.get("product_45") or {}
+        _p49 = _raw_xds_data.get("product_49") or {}
+
+        # ── Delinquency rating (HS-06) ───────────────────────────────────
+        # Prefer P45, fall back to P49
+        _del_obj = (
+            _p45.get("highestDelinquencyRating")
+            or _p49.get("highestDelinquencyRating")
+            or {}
+        )
+        if isinstance(_del_obj, list) and _del_obj:
+            _del_obj = _del_obj[0]
+        if isinstance(_del_obj, dict):
+            bureau_data["delinquency_rating"] = _del_obj.get("highestDelinquencyRating")
+
+        # ── Credit summary overrides (HS-04, HS-07) ──────────────────────
+        # P45 uses GHS-suffixed fields; P49 uses unsuffixed fields with
+        # slightly different names (e.g. totalAccountarrear vs totalAccountInArrearGHS).
+        def _to_int(v):
+            try:
+                return int(str(v).replace(",", "")) if v is not None else None
+            except (ValueError, TypeError):
+                return None
+
+        _summary = _p45.get("creditAccountSummary", _p45.get("creditAccountSummaryGHS", {}))
+        if isinstance(_summary, list) and _summary:
+            _summary = _summary[0]
+        if isinstance(_summary, dict):
+            _jdg = _to_int(_summary.get("totalNumberofJudgementGHS"))
+            _arr = _to_int(_summary.get("totalAccountInArrearGHS"))
+            if _jdg is not None:
+                bureau_data["total_judgements"] = _jdg
+            if _arr is not None:
+                bureau_data["total_accounts_in_arrear"] = _arr
+
+        # Fall back to P49 summary when P45 didn't provide values
+        if "total_accounts_in_arrear" not in bureau_data:
+            _p49_summary = _p49.get("creditAccountSummary", {})
+            if isinstance(_p49_summary, list) and _p49_summary:
+                _p49_summary = _p49_summary[0]
+            if isinstance(_p49_summary, dict):
+                _p49_arr = _to_int(
+                    _p49_summary.get("totalAccountarrear")
+                    or _p49_summary.get("totalAccountInArrearGHS")
+                )
+                if _p49_arr is not None:
+                    bureau_data["total_accounts_in_arrear"] = _p49_arr
+
+        # ── Written-off within 36 months (HS-05) ─────────────────────────
+        # Check BOTH Product 45 (creditAgreementSummary[]) and
+        # Product 49 (detailedFacilityInfo[]) — same field names, different keys.
+        # XDS dates are dd/mm/yyyy (e.g. "24/03/2026").
+        from datetime import datetime as _dt, timedelta
+
+        _cutoff = date.today() - timedelta(days=36 * 30)
+
+        def _parse_xds_date(date_str: str) -> date | None:
+            """Parse XDS date (dd/mm/yyyy) with fallbacks."""
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    return _dt.strptime(date_str.strip()[:10], fmt).date()
+                except (ValueError, TypeError):
+                    continue
+            return None
+
+        _all_accounts: list[dict] = []
+        _p45_accounts = _p45.get("creditAgreementSummary", [])
+        if isinstance(_p45_accounts, list):
+            _all_accounts.extend(a for a in _p45_accounts if isinstance(a, dict))
+        _p49_accounts = _p49.get("detailedFacilityInfo", [])
+        if isinstance(_p49_accounts, list):
+            _all_accounts.extend(a for a in _p49_accounts if isinstance(a, dict))
+
+        for _acct in _all_accounts:
+            if _acct.get("accountStatusCode") != "W":
+                continue
+            _changed_str = _acct.get("changedOnDate") or _acct.get("closedDate", "")
+            if not _changed_str:
+                # No date — conservatively treat as recent
+                bureau_data["has_written_off_within_36m"] = True
+                break
+            _parsed = _parse_xds_date(str(_changed_str))
+            if _parsed is None:
+                # Unparseable date — conservatively treat as recent
+                bureau_data["has_written_off_within_36m"] = True
+                break
+            if _parsed >= _cutoff:
+                bureau_data["has_written_off_within_36m"] = True
+                break
+
+        # ── Identity confidence (HS-03) ───────────────────────────────────
+        # XDS confirms identity via national ID presence. Use 1.0 = verified,
+        # 0.0 = not verified, matching the identity_verified feature definition.
+        # Check P45 first, fall back to P49.
+        _personal = _p45.get("personalDetailsSummary", _p45.get("personalDetails", {}))
+        if isinstance(_personal, list) and _personal:
+            _personal = _personal[0]
+        if not isinstance(_personal, dict):
+            _personal = {}
+        if not _personal.get("nationalIDNo"):
+            _p49_personal = _p49.get("personalDetailsSummary", _p49.get("personalDetails", {}))
+            if isinstance(_p49_personal, list) and _p49_personal:
+                _p49_personal = _p49_personal[0]
+            if isinstance(_p49_personal, dict) and _p49_personal.get("nationalIDNo"):
+                _personal = _p49_personal
+        identity_confidence = 1.0 if _personal.get("nationalIDNo") else 0.0
 
     hard_stop_result = evaluate_hard_stops(
         applicant_age=applicant_age,
+        identity_confidence=identity_confidence,
         bureau_data=bureau_data,
     )
 
@@ -189,25 +478,24 @@ async def create_score_request(
     db.add(score_req)
     await db.flush()
 
-    # Publish to BE → DE topic (stub: score-applicant)
+    # Publish to BE → DE topic (score-applicant)
     # DE will compute features, then publish to inference-request for the AI orchestrator
-    # TODO: Replace topic name and message schema once DE team confirms
-    try:
-        import json as _json
-        from app.core.events import get_event_publisher
-        from app.storage.cache import get_redis_cache
+    #
+    # The DE reads from a single XDS-shaped structure for all 30 features.
+    # _build_xds_payload merges cached XDS data with form values so the
+    # DE has one code path regardless of HIT vs NO_RECORD:
+    #   HIT       → real XDS data + user modifications patched in
+    #   NO_RECORD → synthetic XDS structure built from form data
+    xds_payload = _build_xds_payload(
+        cached_xds=_raw_xds_data,
+        applicant=payload_dict.get("applicant"),
+        employment=payload_dict.get("employment"),
+        financial_profile=payload_dict.get("financial_profile"),
+        bureau_data=payload_dict.get("bureau_data"),
+    )
 
-        # Retrieve cached raw XDS reports from bureau-lookup step
-        raw_xds_data = {}
-        consumer_id = payload_dict.get("bureau_data", {}).get("consumer_id")
-        if consumer_id:
-            cache = get_redis_cache()
-            cached = await cache._redis.get(f"bureau:{consumer_id}")
-            if cached:
-                raw_xds_data = _json.loads(cached)
-                logger.debug(f"[scoring] Retrieved cached XDS data for consumer {consumer_id}")
-            else:
-                logger.warning(f"[scoring] No cached XDS data for consumer {consumer_id}")
+    try:
+        from app.core.events import get_event_publisher
 
         publisher = get_event_publisher()
         await publisher.publish(
@@ -218,8 +506,13 @@ async def create_score_request(
                 "consumer_id": consumer_id,
                 "applicant": payload_dict.get("applicant"),
                 "loan_request": payload_dict.get("loan_request"),
-                "xds_product_45": raw_xds_data.get("product_45"),
-                "xds_product_49": raw_xds_data.get("product_49"),
+                # XDS-format payload — always populated, either from
+                # real bureau data or synthesised from the form.
+                "xds_product_45": xds_payload["product_45"],
+                "xds_product_49": xds_payload["product_49"],
+                # DE forwards models_to_run to the AI orchestrator's inference-request.
+                # Defaults to ["all"] — run the full Phase 1 + Phase 2 pipeline.
+                "models_to_run": ["all"],
                 "metadata": {
                     "organization_id": str(auth.organization_id),
                     "source": score_req.request_source.value,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -24,10 +24,12 @@ class ModelStatus(str, enum.Enum):
 
 class ModelVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "model_versions"
-
-    version: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
+    __table_args__ = (
+        # Each model type has its own version sequence (e.g., credit_risk v1, fraud_detection v1)
+        UniqueConstraint("model_type", "version", name="uq_model_versions_type_version"),
     )
+
+    version: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     model_type: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[ModelStatus] = mapped_column(
         Enum(
