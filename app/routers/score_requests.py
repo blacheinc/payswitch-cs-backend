@@ -138,20 +138,38 @@ def _build_xds_payload(
 
     p45["personalDetailsSummary"] = personal
 
-    # ── creditAccountSummary (from bureau_data manual inputs) ───────────
+    # ── creditAccountSummary (from bureau_data.credit_summary) ──────────
+    # Maps BureauCreditSummary fields → XDS creditAccountSummary fields.
     summary = p45.get("creditAccountSummary", p45.get("creditAccountSummaryGHS"))
     if isinstance(summary, list) and summary:
         summary = dict(summary[0])
     elif not isinstance(summary, dict):
         summary = {}
 
-    if bureau_data:
-        if bureau_data.get("total_accounts") is not None:
-            summary["totalNumberofAccountsGHS"] = str(bureau_data["total_accounts"])
-        if bureau_data.get("delinquent_accounts") is not None:
-            summary["totalAccountInArrearGHS"] = str(bureau_data["delinquent_accounts"])
-        if bureau_data.get("public_records") is not None:
-            summary["totalNumberofJudgementGHS"] = str(bureau_data["public_records"])
+    credit_summary = (bureau_data.get("credit_summary") or {}) if bureau_data else {}
+    if isinstance(credit_summary, dict):
+        _cs_map = {
+            "total_accounts": "totalNumberofAccountsGHS",
+            "total_monthly_instalment_ghs": "totalMonthlyInstalmentGHS",
+            "total_outstanding_debt_ghs": "totalOutstandingdebtGHS",
+            "total_accounts_in_arrear": "totalAccountInArrearGHS",
+            "total_arrear_amount_ghs": "totalAmountInArrearGHS",
+            "total_accounts_good_standing": "totalaccountinGoodconditionGHS",
+            "total_judgements": "totalNumberofJudgementGHS",
+            "total_judgement_amount_ghs": "totalJudgementAmountGHS",
+            "total_dishonoured_cheques": "totalNumberofDishonouredGHS",
+        }
+        for form_key, xds_key in _cs_map.items():
+            val = credit_summary.get(form_key)
+            if val is not None:
+                summary[xds_key] = str(val)
+
+        # Delinquency rating lives in its own top-level object
+        del_rating = credit_summary.get("delinquency_rating")
+        if del_rating is not None:
+            p45["highestDelinquencyRating"] = {
+                "highestDelinquencyRating": str(del_rating)
+            }
 
     # Ensure required keys exist (DE expects these even if "0")
     summary.setdefault("totalNumberofAccountsGHS", "0")
@@ -165,9 +183,31 @@ def _build_xds_payload(
     summary.setdefault("totalNumberofDishonouredGHS", "0")
     p45["creditAccountSummary"] = summary
 
-    # ── creditAgreementSummary (from financial_profile existing loans) ───
-    # Only populate if cached XDS didn't already have accounts.
-    if not p45.get("creditAgreementSummary") and financial_profile:
+    # ── creditAgreementSummary (from bureau_data.credit_accounts) ────────
+    # Maps BureauCreditAccount fields → XDS creditAgreementSummary entries.
+    # User modifications to individual accounts override cached XDS data.
+    credit_accounts = (bureau_data.get("credit_accounts") or []) if bureau_data else []
+    if credit_accounts:
+        accts = []
+        for acct in credit_accounts:
+            if not isinstance(acct, dict):
+                continue
+            accts.append({
+                "subscriberName": acct.get("subscriber_name", ""),
+                "accountNo": acct.get("account_no", ""),
+                "dateAccountOpened": acct.get("date_opened", ""),
+                "indicatorDescription": acct.get("facility_type", ""),
+                "currency": acct.get("currency", "GHS"),
+                "openingBalanceAmt": str(acct.get("credit_limit") or "0"),
+                "currentBalanceAmt": str(acct.get("current_balance") or "0"),
+                "instalmentAmount": str(acct.get("instalment_amount") or "0"),
+                "amountOverdue": str(acct.get("arrear_amount") or "0"),
+                "accountStatusCode": acct.get("status_code", ""),
+                "monthsInArrears": str(acct.get("months_in_arrears") or "0"),
+            })
+        p45["creditAgreementSummary"] = accts
+    elif not p45.get("creditAgreementSummary") and financial_profile:
+        # Fallback: build from financial_profile.existing_loans (NO_RECORD)
         existing = financial_profile.get("existing_loans") or []
         accts = []
         for loan in existing:
@@ -280,12 +320,18 @@ async def create_score_request(
             logger.warning(f"[scoring] XDS cache fetch failed: {_e}")
 
     # Build the bureau_data dict for hard-stop evaluation.
-    # Start with whatever the client submitted, then overlay authoritative
-    # values from the cached XDS report where available.
+    # Start with whatever the client submitted (credit_summary from the
+    # bureau lookup form), then overlay authoritative values from the
+    # cached XDS report where available.
     bureau_data: dict = {}
-    if body.bureau_data:
-        bureau_data["total_judgements"] = body.bureau_data.public_records
-        bureau_data["total_accounts_in_arrear"] = body.bureau_data.delinquent_accounts
+    if body.bureau_data and body.bureau_data.credit_summary:
+        _cs = body.bureau_data.credit_summary
+        if _cs.total_judgements is not None:
+            bureau_data["total_judgements"] = _cs.total_judgements
+        if _cs.total_accounts_in_arrear is not None:
+            bureau_data["total_accounts_in_arrear"] = _cs.total_accounts_in_arrear
+        if _cs.delinquency_rating is not None:
+            bureau_data["delinquency_rating"] = _cs.delinquency_rating
 
     identity_confidence: float | None = None
 
