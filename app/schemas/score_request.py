@@ -8,6 +8,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.bureau_schemas import (
+    BureauCreditAccount,
+    BureauCreditSummary,
+    BureauFeatures,
+)
 from app.schemas.common import BaseSchema
 
 
@@ -111,16 +116,38 @@ class FinancialProfile(BaseModel):
 
 
 class BureauData(BaseModel):
-    # Returned by the bureau-lookup endpoint — must be forwarded in the score request
-    # so the backend can retrieve cached XDS data for hard-stop evaluation.
+    """Bureau data from the bureau-lookup step, forwarded in the score request.
+
+    The frontend receives structured data from ``POST /v1/bureau-lookup``
+    (personal details, credit summary, accounts, features) and renders
+    it in a form.  The user reviews and may modify values.  When they
+    submit the score request, the (possibly modified) data comes back
+    here so the backend can:
+      1. Retrieve cached raw XDS from Redis via ``consumer_id``
+      2. Patch the cached XDS with any user modifications
+      3. Send the patched XDS to the Data Engineer in the same format
+    """
+
+    # Key for retrieving cached raw XDS data from Redis
     consumer_id: str | None = None
-    bureau_score: int | None = None
-    bureau_provider: str | None = None
-    total_accounts: int | None = None
-    delinquent_accounts: int | None = None
-    oldest_account_months: int | None = None
-    recent_inquiries_6m: int | None = None
-    public_records: int | None = None
+
+    # Bureau hit metadata
+    bureau_hit_status: str | None = Field(
+        default=None, description="HIT, NO_RECORD, or MULTIPLE_MATCH"
+    )
+    product_source: str | None = Field(
+        default=None, description="45, 49, or 45+49"
+    )
+
+    # Credit summary — maps to creditAccountSummary in XDS
+    credit_summary: BureauCreditSummary | None = None
+
+    # Individual credit accounts — maps to creditAgreementSummary (P45)
+    # and detailedFacilityInfo (P49)
+    credit_accounts: list[BureauCreditAccount] | None = None
+
+    # Pre-binned features returned by bureau-lookup (for audit / display)
+    features: BureauFeatures | None = None
 
 
 class TelcoData(BaseModel):
