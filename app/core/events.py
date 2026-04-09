@@ -69,16 +69,13 @@ class ServiceBusPublisher:
 
         client = await self._get_client()
         async with client.get_topic_sender(topic_name) as sender:
-            # Promote message fields to application properties for SQL filtering/routing
-            # We only promote primitive types that Service Bus supports
             app_props = {}
             for k, v in message.items():
                 if isinstance(v, (str, int, float, bool)):
                     app_props[k] = v
                 elif v is None:
-                    continue  # Null properties are generally handled as missing
+                    continue
                 else:
-                    # Convert UUIDs or other objects to strings if they are simple
                     app_props[k] = str(v)
 
             sb_message = ServiceBusMessage(

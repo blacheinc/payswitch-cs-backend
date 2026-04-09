@@ -11,6 +11,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Annotated, Any
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,11 +69,17 @@ async def bureau_lookup(
             status_code=502,
             detail=f"Credit bureau lookup failed: {e.message}",
         )
+    except httpx.TimeoutException:
+        logger.error("[bureau-lookup] Connection timeout reaching XDS API")
+        raise HTTPException(
+            status_code=504,
+            detail="Credit bureau API is unreachable (connection timeout)",
+        )
     except Exception as e:
         logger.exception("[bureau-lookup] Unexpected error")
         raise HTTPException(
             status_code=500,
-            detail="Internal error during bureau lookup",
+            detail=f"Internal error during bureau lookup: {type(e).__name__}: {e}",
         )
 
     # Each product is an independent flow
@@ -146,10 +153,10 @@ async def bureau_lookup(
 
         cache = get_redis_cache()
         cache_key = f"bureau:{consumer_id}"
-        await cache._redis.set(
+        await cache.set(
             cache_key,
             json.dumps({"product_45": p45_report, "product_49": p49_report}),
-            ex=3600,  # 1 hour TTL
+            ttl=3600,  # 1 hour TTL
         )
         logger.debug(f"[bureau-lookup] Cached raw XDS data as {cache_key}")
     except Exception as e:
@@ -163,7 +170,7 @@ async def bureau_lookup(
         credit_accounts=credit_accounts,
         features=features,
         metadata=metadata,
-        enquiry_id=primary_match.get("enquiryID"),
+        enquiry_id=str(primary_match.get("enquiryID", "")) if primary_match.get("enquiryID") else "",
         consumer_id=consumer_id,
     )
 
@@ -182,7 +189,7 @@ def _extract_personal_details(
         personal = {}
 
     return BureauPersonalDetails(
-        consumer_id=match.get("consumerID"),
+        consumer_id=str(match.get("consumerID", "")) if match.get("consumerID") else "",
         first_name=personal.get("firstName", match.get("firstName")),
         surname=personal.get("surname", match.get("surname")),
         other_names=personal.get("otherNames", match.get("otherNames")),

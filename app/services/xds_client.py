@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 XDS_BASE_URL = "https://www.online.xdsdata.com/XdsDataRestApi/Api"
-XDS_TIMEOUT = 30.0  # seconds
+XDS_TIMEOUT = 60.0  # seconds
 
 # Official enquiry reason values (from XDS API docs v2)
 ENQUIRY_REASONS = [

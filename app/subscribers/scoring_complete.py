@@ -125,7 +125,8 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                     credit_risk.get("pd_confidence") if credit_risk else None
                 )
                 score_req.scored_at = scoring_ts or utcnow()
-                score_req.score_result = message  # Full response in JSONB
+                # We no longer dump the raw JSON here because the API endpoints
+                # now natively join the detailed scoring_results table row.
 
                 # Trigger webhook delivery if configured
                 try:

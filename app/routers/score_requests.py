@@ -17,6 +17,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import PaginatedResponse
@@ -313,7 +314,7 @@ async def create_score_request(
     if consumer_id:
         try:
             _cache = _get_redis_cache()
-            _cached_bytes = await _cache._redis.get(f"bureau:{consumer_id}")
+            _cached_bytes = await _cache.get(f"bureau:{consumer_id}")
             if _cached_bytes:
                 _raw_xds_data = _json.loads(_cached_bytes)
         except Exception as _e:
@@ -465,12 +466,6 @@ async def create_score_request(
             idempotency_key=idempotency_key,
             api_key_id=auth.api_key.id if auth.api_key else None,
             created_by_user_id=auth.user_id,
-            score_result={
-                "decision": "DECLINE",
-                "hard_stop": True,
-                "triggered_rules": hard_stop_result.triggered_rules,
-                "decline_reasons": hard_stop_result.decline_reasons,
-            },
             scored_at=utcnow(),
         )
         db.add(score_req)
@@ -524,57 +519,77 @@ async def create_score_request(
     db.add(score_req)
     await db.flush()
 
-    # Publish to BE → DE topic (score-applicant)
-    # DE will compute features, then publish to inference-request for the AI orchestrator
-    #
-    # The DE reads from a single XDS-shaped structure for all 30 features.
-    # _build_xds_payload merges cached XDS data with form values so the
-    # DE has one code path regardless of HIT vs NO_RECORD:
-    #   HIT       → real XDS data + user modifications patched in
-    #   NO_RECORD → synthetic XDS structure built from form data
-    xds_payload = _build_xds_payload(
-        cached_xds=_raw_xds_data,
-        applicant=payload_dict.get("applicant"),
-        employment=payload_dict.get("employment"),
-        financial_profile=payload_dict.get("financial_profile"),
-        bureau_data=payload_dict.get("bureau_data"),
-    )
+    # Apply reverse mapping from any frontend modifications
+    features = payload_dict.get("bureau_data", {}).get("features")
+    if features:
+        from app.services.xds_reverse_mapper import apply_feature_overrides
+        _raw_xds_data = apply_feature_overrides(_raw_xds_data, features)
 
     try:
         from app.core.events import get_event_publisher
+        from app.config import get_settings
 
         publisher = get_event_publisher()
-        await publisher.publish(
-            topic_name="score-applicant",
-            message={
-                "request_id": tracking_id,
-                "timestamp": score_req.created_at.isoformat(),
-                "consumer_id": consumer_id,
-                "applicant": payload_dict.get("applicant"),
-                "loan_request": payload_dict.get("loan_request"),
-                # XDS-format payload — always populated, either from
-                # real bureau data or synthesised from the form.
-                "xds_product_45": xds_payload["product_45"],
-                "xds_product_49": xds_payload["product_49"],
-                # DE forwards models_to_run to the AI orchestrator's inference-request.
-                # Defaults to ["all"] — run the full Phase 1 + Phase 2 pipeline.
-                "models_to_run": ["all"],
-                "metadata": {
-                    "organization_id": str(auth.organization_id),
-                    "source": score_req.request_source.value,
-                },
-            },
-        )
-        logger.info(f"[scoring] Published score-applicant for {tracking_id}")
+        settings = get_settings()
+
+        de_payload = {
+            "request_id": tracking_id,
+            "data_source_id": tracking_id,
+            "source_system": "xds",
+            "models_to_run": ["all"],
+            "xds_payload": {
+                "consumer_full_report_45": _raw_xds_data.get("product_45") if _raw_xds_data else None,
+                "consumer_mobile_report_49": _raw_xds_data.get("product_49") if _raw_xds_data else None
+            }
+        }
+        
+        # Publish to the DE Azure Function to trigger inferencing
+        async def _publish_to_de_inference(payload: dict):
+            import httpx
+
+            url = settings.de_inference_url
+            if settings.de_inference_code:
+                url = f"{url}?code={settings.de_inference_code}"
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(url, json=payload)
+                    if resp.status_code in (200, 201, 202):
+                        logger.info(f"[scoring] Published score request {tracking_id} to DE inference function")
+                    else:
+                        logger.error(f"[scoring] DE inference call failed ({resp.status_code}): {resp.text}")
+            except Exception as inner_e:
+                logger.error(f"[scoring] DE inference call threw exception: {inner_e}")
+
+        # Fire and forget
+        asyncio.create_task(_publish_to_de_inference(de_payload))
+        
     except Exception as e:
-        logger.error(f"[scoring] Failed to publish score-applicant: {e}")
+        logger.error(f"[scoring] Failed to trigger DE inference logic: {e}")
         score_req.status = ScoreRequestStatus.FAILED
-        score_req.score_result = {"error": f"Failed to submit for scoring: {str(e)}"}
+        score_req.scored_at = utcnow()
+
+        # Also create a ScoringResult row so the subscriber's idempotency
+        # check stays consistent and GET endpoints return the error inline
+        from app.models.scoring_result import ScoringDecision, ScoringResult
+
+        error_result = ScoringResult(
+            request_id=tracking_id,
+            score_request_id=score_req.id,
+            scoring_timestamp=utcnow(),
+            decision=ScoringDecision.ERROR,
+            condition_applied=[],
+            scoring_metadata=None,
+            errors=[str(e)],
+        )
+        db.add(error_result)
+        # Wire the relationship so it's available for the response immediately
+        score_req.scoring_result = error_result
 
     response = ScoreRequestResponse(
         request_id=tracking_id,
         reference_id=body.reference_id,
         status=score_req.status.value,
+        scoring_result=score_req.scoring_result,
         timestamps={"requested_at": score_req.created_at.isoformat()},
     )
 
@@ -596,7 +611,7 @@ async def get_score_request(
 ) -> ScoreRequestResponse:
     """Get the result of a score request by tracking ID."""
     result = await db.execute(
-        select(ScoreRequest).where(
+        select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
             ScoreRequest.tracking_id == request_id,
             ScoreRequest.organization_id == auth.organization_id,
         )
@@ -605,16 +620,14 @@ async def get_score_request(
     if not score_req:
         raise NotFoundError("Score request", request_id)
 
-    if score_req.score_result:
-        return ScoreRequestResponse(**score_req.score_result)
-
-    # Still processing
     return ScoreRequestResponse(
         request_id=score_req.tracking_id,
         reference_id=score_req.reference_id,
         status=score_req.status.value,
+        scoring_result=score_req.scoring_result,
         timestamps={
             "requested_at": score_req.created_at.isoformat(),
+            "scored_at": score_req.scored_at.isoformat() if score_req.scored_at else None,
         },
     )
 
@@ -768,7 +781,7 @@ async def list_score_requests(
     status_filter: str | None = Query(None, alias="status"),
 ) -> PaginatedResponse[ScoreRequestSummary]:
     """List all score requests for the authenticated organization."""
-    query = select(ScoreRequest).where(
+    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
         ScoreRequest.organization_id == auth.organization_id
     )
     count_query = select(func.count(ScoreRequest.id)).where(
@@ -800,6 +813,7 @@ async def list_score_requests(
             request_source=r.request_source.value,
             created_at=r.created_at,
             scored_at=r.scored_at,
+            scoring_result=r.scoring_result,
         )
         for r in requests
     ]

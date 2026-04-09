@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     azure_servicebus_sub_backend: str = "backend-sub"
     azure_servicebus_sub_cs_backend: str = "cs-backend"
 
+    # DE inference Azure Function
+    de_inference_url: str = "https://blache-cdtscr-dev-transform-y27jgavel2x32.azurewebsites.net/api/transform/inference"
+    de_inference_code: str = ""
+
     # ── XDS Credit Bureau ────────────────────────────────────────────────────
     xds_username: str = ""
     xds_password: str = ""

@@ -36,38 +36,45 @@ class BureauLookupRequest(BaseModel):
 
 
 class BureauFeatures(BaseModel):
-    """All 30 pre-binned features (0-1 scale) as defined in the contract."""
+    """All 30 features as defined in the contract.
 
-    highest_delinquency_rating: float | None = Field(default=None, ge=0, le=1)
-    months_on_time_24m: float | None = Field(default=None, ge=0, le=1)
-    worst_arrears_24m: float | None = Field(default=None, ge=0, le=1)
-    current_streak_on_time: float | None = Field(default=None, ge=0, le=1)
-    has_active_arrears: float | None = Field(default=None, ge=0, le=1)
-    total_arrear_amount_ghs: float | None = Field(default=None, ge=0, le=1)
-    total_outstanding_debt_ghs: float | None = Field(default=None, ge=0, le=1)
-    utilisation_ratio: float | None = Field(default=None, ge=0, le=1)
-    num_active_accounts: float | None = Field(default=None, ge=0, le=1)
-    total_monthly_instalment_ghs: float | None = Field(default=None, ge=0, le=1)
-    credit_age_months: float | None = Field(default=None, ge=0, le=1)
-    num_accounts_total: float | None = Field(default=None, ge=0, le=1)
-    num_closed_accounts_good: float | None = Field(default=None, ge=0, le=1)
-    product_diversity_score: float | None = Field(default=None, ge=0, le=1)
-    mobile_loan_history_count: float | None = Field(default=None, ge=0, le=1)
-    mobile_max_loan_ghs: float | None = Field(default=None, ge=0, le=1)
-    has_judgement: float | None = Field(default=None, ge=0, le=1)
-    has_written_off: float | None = Field(default=None, ge=0, le=1)
-    has_charged_off: float | None = Field(default=None, ge=0, le=1)
-    has_legal_handover: float | None = Field(default=None, ge=0, le=1)
-    num_bounced_cheques: float | None = Field(default=None, ge=0, le=1)
-    has_adverse_default: float | None = Field(default=None, ge=0, le=1)
-    num_enquiries_3m: float | None = Field(default=None, ge=0, le=1)
-    num_enquiries_12m: float | None = Field(default=None, ge=0, le=1)
-    enquiry_reason_flags: float | None = Field(default=None, ge=0, le=1)
-    applicant_age: float | None = Field(default=None, ge=0, le=1)
-    identity_verified: float | None = Field(default=None, ge=0, le=1)
-    num_dependants: float | None = Field(default=None, ge=0, le=1)
-    has_employer_detail: float | None = Field(default=None, ge=0, le=1)
-    address_stability: float | None = Field(default=None, ge=0, le=1)
+    Values are typically pre-binned to 0-1 scale by the bureau-lookup
+    endpoint, but the DE pipeline or raw bureau data may produce values
+    outside that range (e.g. negative arrear amounts from overpayments).
+    Constraints are intentionally relaxed so validation doesn't reject
+    legitimate bureau data — normalization happens downstream in the DE.
+    """
+
+    highest_delinquency_rating: float | None = None
+    months_on_time_24m: float | None = None
+    worst_arrears_24m: float | None = None
+    current_streak_on_time: float | None = None
+    has_active_arrears: float | None = None
+    total_arrear_amount_ghs: float | None = None
+    total_outstanding_debt_ghs: float | None = None
+    utilisation_ratio: float | None = None
+    num_active_accounts: float | None = None
+    total_monthly_instalment_ghs: float | None = None
+    credit_age_months: float | None = None
+    num_accounts_total: float | None = None
+    num_closed_accounts_good: float | None = None
+    product_diversity_score: float | None = None
+    mobile_loan_history_count: float | None = None
+    mobile_max_loan_ghs: float | None = None
+    has_judgement: float | None = None
+    has_written_off: float | None = None
+    has_charged_off: float | None = None
+    has_legal_handover: float | None = None
+    num_bounced_cheques: float | None = None
+    has_adverse_default: float | None = None
+    num_enquiries_3m: float | None = None
+    num_enquiries_12m: float | None = None
+    enquiry_reason_flags: float | None = None
+    applicant_age: float | None = None
+    identity_verified: float | None = None
+    num_dependants: float | None = None
+    has_employer_detail: float | None = None
+    address_stability: float | None = None
 
 
 # ── Bureau Metadata ─────────────────────────────────────────────────────────

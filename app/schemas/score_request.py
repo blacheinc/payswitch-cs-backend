@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -19,181 +19,47 @@ from app.schemas.common import BaseSchema
 # ── Score Request Input (mirrors PRD Section 7.1) ─────────────────────────────
 
 
-class ApplicantAddress(BaseModel):
-    street: str | None = None
-    city: str | None = None
-    region: str | None = None
-    digital_address: str | None = None
-
-
 class ApplicantInfo(BaseModel):
     full_name: str = Field(min_length=2, max_length=200)
     date_of_birth: date
-    national_id_type: str = Field(
-        description="ghana_card, voter_id, passport, drivers_license, nhis"
-    )
-    national_id_number: str = Field(max_length=50)
-    gender: str | None = Field(default=None, description="male, female, other")
-    marital_status: str | None = None
-    phone: str = Field(pattern=r"^\+?[0-9]{10,15}$")
-    email: str | None = None
-    address: ApplicantAddress | None = None
-    dependents: int | None = Field(default=None, ge=0, le=20)
-    education_level: str | None = None
-
-
-class EmploymentInfo(BaseModel):
-    status: str | None = Field(
-        default=None,
-        description="employed, self_employed, unemployed, retired, student",
-    )
-    employer_name: str | None = None
-    employer_industry: str | None = None
-    job_title: str | None = None
-    duration_months: int | None = Field(default=None, ge=0)
-    total_work_experience_months: int | None = Field(default=None, ge=0)
-    monthly_income: float | None = Field(default=None, ge=0)
-    income_currency: str = "GHS"
-    income_verification_type: str | None = None
-    other_income: float | None = Field(default=None, ge=0)
-    other_income_source: str | None = None
+    national_id_number: str | None = Field(default=None, max_length=50)
+    phone: str | None = None
+    account_number: str | None = Field(default=None, max_length=50)
 
 
 class LoanRequestInfo(BaseModel):
     amount: float = Field(gt=0)
-    currency: str = "GHS"
-    purpose: str = Field(
-        description="personal, business, education, housing, vehicle, medical, agriculture, debt_consolidation, other"
-    )
-    purpose_description: str | None = Field(default=None, max_length=500)
     tenure_months: int = Field(ge=1, le=360)
-    collateral_type: str | None = None
-    collateral_value: float | None = Field(default=None, ge=0)
-
-
-class ExistingLoan(BaseModel):
-    lender_name: str | None = None
-    loan_type: str | None = None
-    original_amount: float | None = None
-    outstanding_balance: float | None = None
-    monthly_payment: float | None = None
-    status: str | None = None
-    days_past_due: int | None = None
-
-
-class BankAccount(BaseModel):
-    bank_name: str | None = None
-    account_type: str | None = None
-    average_balance_3m: float | None = None
-    account_age_months: int | None = None
-
-
-class MobileMoneyInfo(BaseModel):
-    active: bool = False
-    providers: list[str] | None = None
-    avg_monthly_inflow: float | None = None
-    avg_monthly_outflow: float | None = None
-    account_age_months: int | None = None
-
-
-class AssetsInfo(BaseModel):
-    owns_property: bool | None = None
-    property_value: float | None = None
-    owns_vehicle: bool | None = None
-    vehicle_value: float | None = None
-    savings_investments: float | None = None
-
-
-class FinancialProfile(BaseModel):
-    existing_loans: list[ExistingLoan] | None = None
-    has_bank_account: bool | None = None
-    bank_accounts: list[BankAccount] | None = None
-    mobile_money: MobileMoneyInfo | None = None
-    has_credit_card: bool | None = None
-    credit_card_utilization: float | None = Field(default=None, ge=0, le=1)
-    monthly_expenses: float | None = None
-    assets: AssetsInfo | None = None
+    purpose: str | None = None
 
 
 class BureauData(BaseModel):
-    """Bureau data from the bureau-lookup step, forwarded in the score request.
-
-    The frontend receives structured data from ``POST /v1/bureau-lookup``
-    (personal details, credit summary, accounts, features) and renders
-    it in a form.  The user reviews and may modify values.  When they
-    submit the score request, the (possibly modified) data comes back
-    here so the backend can:
-      1. Retrieve cached raw XDS from Redis via ``consumer_id``
-      2. Patch the cached XDS with any user modifications
-      3. Send the patched XDS to the Data Engineer in the same format
-    """
-
+    """Bureau data from the bureau-lookup step, forwarded in the score request."""
     # Key for retrieving cached raw XDS data from Redis
-    consumer_id: str | None = None
-
+    consumer_id: str
     # Bureau hit metadata
-    bureau_hit_status: str | None = Field(
-        default=None, description="HIT, NO_RECORD, or MULTIPLE_MATCH"
-    )
-    product_source: str | None = Field(
-        default=None, description="45, 49, or 45+49"
-    )
-
+    bureau_hit_status: str | None = None
+    product_source: str | None = None
     # Credit summary — maps to creditAccountSummary in XDS
     credit_summary: BureauCreditSummary | None = None
-
-    # Individual credit accounts — maps to creditAgreementSummary (P45)
-    # and detailedFacilityInfo (P49)
+    # Individual credit accounts
     credit_accounts: list[BureauCreditAccount] | None = None
-
     # Pre-binned features returned by bureau-lookup (for audit / display)
     features: BureauFeatures | None = None
 
 
-class TelcoData(BaseModel):
-    account_age_months: int | None = None
-    avg_monthly_spend: float | None = None
-    payment_regularity: str | None = None
-
-
-class SocialSignals(BaseModel):
-    linkedin_profile: bool | None = None
-    professional_associations: int | None = None
-
-
-class AlternativeData(BaseModel):
-    utility_payment_history: str | None = None
-    rent_payment_history: str | None = None
-    telco_data: TelcoData | None = None
-    social_signals: SocialSignals | None = None
-
-
-class ConsentInfo(BaseModel):
-    bureau_check_authorized: bool = True
-    consent_date: date
-    consent_reference: str | None = None
-    data_sharing_authorized: bool | None = None
-
-
 class RequestMetadata(BaseModel):
     channel: str | None = None
-    product_type: str | None = None
-    branch_code: str | None = None
-    officer_id: str | None = None
     callback_url: str | None = None
 
 
 class CreateScoreRequestInput(BaseModel):
-    """Full credit score request – matches PRD Section 7.1."""
+    """Minimal credit score request – only expects exactly what the backend needs."""
 
     reference_id: str | None = Field(default=None, max_length=100)
     applicant: ApplicantInfo
-    employment: EmploymentInfo | None = None
     loan_request: LoanRequestInfo
-    financial_profile: FinancialProfile | None = None
-    bureau_data: BureauData | None = None
-    alternative_data: AlternativeData | None = None
-    consent: ConsentInfo
+    bureau_data: BureauData
     metadata: RequestMetadata | None = None
 
 
@@ -284,6 +150,7 @@ class ScoreRequestResponse(BaseModel):
     affordability: AffordabilityAssessment | None = None
     model_info: ModelInfo | None = None
     timestamps: ScoreTimestamps
+    scoring_result: Optional["ScoringResultResponse"] = None
     error: ScoreError | None = None
 
 
@@ -300,6 +167,7 @@ class ScoreRequestSummary(BaseSchema):
     request_source: str
     created_at: datetime
     scored_at: datetime | None
+    scoring_result: Optional["ScoringResultResponse"] = None
 
 
 # ── Outcome / Performance ────────────────────────────────────────────────────
@@ -396,6 +264,8 @@ class ScoringMetadata(BaseModel):
 
 class ScoringResultResponse(BaseModel):
     """Full scoring result from the AI pipeline — shown to loan officers."""
+    
+    model_config = {"from_attributes": True}
 
     request_id: str
     scoring_timestamp: datetime | None = None
