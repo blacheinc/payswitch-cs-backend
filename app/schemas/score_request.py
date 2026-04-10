@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.bureau_schemas import (
     BureauCreditAccount,
@@ -30,6 +30,27 @@ class ApplicantInfo(BaseModel):
 class LoanRequestInfo(BaseModel):
     amount: float = Field(gt=0)
     tenure_months: int = Field(ge=1, le=360)
+    purpose: str | None = None
+
+
+# ── Response summaries (echo back what was submitted) ──────────────────────────
+
+
+class ApplicantSummary(BaseModel):
+    """Lightweight applicant info returned in score responses."""
+
+    full_name: str | None = None
+    date_of_birth: str | None = None
+    national_id_number: str | None = None
+    phone: str | None = None
+    account_number: str | None = None
+
+
+class LoanRequestSummary(BaseModel):
+    """Lightweight loan request info returned in score responses."""
+
+    amount: float | None = None
+    tenure_months: int | None = None
     purpose: str | None = None
 
 
@@ -143,6 +164,8 @@ class ScoreRequestResponse(BaseModel):
     request_id: str
     reference_id: str | None = None
     status: str
+    applicant: ApplicantSummary | None = None
+    loan_request: LoanRequestSummary | None = None
     score: ScoreValue | None = None
     score_components: ScoreComponents | None = None
     risk_factors: list[RiskFactor] | None = None
@@ -162,6 +185,9 @@ class ScoreRequestSummary(BaseSchema):
     tracking_id: str
     reference_id: str | None
     status: str
+    applicant_name: str | None = None
+    loan_amount: float | None = None
+    loan_purpose: str | None = None
     score_value: int | None
     risk_category: str | None
     request_source: str
@@ -272,6 +298,10 @@ class ScoringResultResponse(BaseModel):
     decision: str  # APPROVE / CONDITIONAL_APPROVE / REFER / DECLINE / FRAUD_HOLD / ERROR
     condition_applied: list[str] | None = None  # CA-01 through CA-06
 
+    # Hard-stop decline details (populated when decision is a hard-stop DECLINE)
+    decline_reasons: list[str] | None = None
+    triggered_rules: list[str] | None = None
+
     credit_risk: CreditRiskResult | None = None
     fraud_detection: FraudDetectionResult | None = None
     loan_amount: LoanAmountResult | None = None
@@ -280,6 +310,23 @@ class ScoringResultResponse(BaseModel):
     scoring_metadata: ScoringMetadata | dict[str, Any] | None = None
     errors: list[str] | None = None  # Only for ERROR decisions
 
+    @model_validator(mode="after")
+    def _surface_hard_stop_details(self) -> "ScoringResultResponse":
+        """Extract decline reasons from scoring_metadata for hard-stop declines.
+
+        When loaded via ``from_attributes`` (ORM relationship), the ORM object
+        has no ``decline_reasons`` column — the data lives inside the
+        ``scoring_metadata`` JSONB.  This validator ensures those fields are
+        always surfaced as first-class response fields.
+        """
+        meta = self.scoring_metadata
+        if isinstance(meta, dict) and meta.get("hard_stop"):
+            if not self.decline_reasons:
+                self.decline_reasons = meta.get("decline_reasons")
+            if not self.triggered_rules:
+                self.triggered_rules = meta.get("triggered_rules")
+        return self
+
 
 class HardStopDeclineResponse(BaseModel):
     """Response when an applicant is immediately declined by hard-stop rules."""
@@ -287,6 +334,8 @@ class HardStopDeclineResponse(BaseModel):
     request_id: str
     status: str = "DECLINED"
     decision: str = "DECLINE"
+    applicant: ApplicantSummary | None = None
+    loan_request: LoanRequestSummary | None = None
     decline_reasons: list[str]
     triggered_rules: list[str]
 

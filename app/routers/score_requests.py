@@ -35,8 +35,10 @@ from app.models.score_request import (
 )
 from app.models.scoring_result import ScoringResult
 from app.schemas.score_request import (
+    ApplicantSummary,
     CreateScoreRequestInput,
     HardStopDeclineResponse,
+    LoanRequestSummary,
     OutcomeResponse,
     OverrideDecisionRequest,
     OverrideDecisionResponse,
@@ -53,6 +55,34 @@ from app.storage.cache import get_redis_cache
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/score-requests", tags=["Scoring API"])
+
+
+def _extract_summaries(
+    payload: dict,
+) -> tuple[ApplicantSummary | None, LoanRequestSummary | None]:
+    """Extract applicant and loan summaries from a stored request_payload."""
+    applicant_data = payload.get("applicant")
+    loan_data = payload.get("loan_request")
+
+    applicant = None
+    if applicant_data and isinstance(applicant_data, dict):
+        applicant = ApplicantSummary(
+            full_name=applicant_data.get("full_name"),
+            date_of_birth=str(applicant_data["date_of_birth"]) if applicant_data.get("date_of_birth") else None,
+            national_id_number=applicant_data.get("national_id_number"),
+            phone=applicant_data.get("phone"),
+            account_number=applicant_data.get("account_number"),
+        )
+
+    loan = None
+    if loan_data and isinstance(loan_data, dict):
+        loan = LoanRequestSummary(
+            amount=loan_data.get("amount"),
+            tenure_months=loan_data.get("tenure_months"),
+            purpose=loan_data.get("purpose"),
+        )
+
+    return applicant, loan
 
 
 def _build_xds_payload(
@@ -495,6 +525,18 @@ async def create_score_request(
 
         return HardStopDeclineResponse(
             request_id=tracking_id,
+            applicant=ApplicantSummary(
+                full_name=body.applicant.full_name,
+                date_of_birth=str(body.applicant.date_of_birth),
+                national_id_number=body.applicant.national_id_number,
+                phone=body.applicant.phone,
+                account_number=body.applicant.account_number,
+            ),
+            loan_request=LoanRequestSummary(
+                amount=body.loan_request.amount,
+                tenure_months=body.loan_request.tenure_months,
+                purpose=body.loan_request.purpose,
+            ),
             decline_reasons=hard_stop_result.decline_reasons,
             triggered_rules=hard_stop_result.triggered_rules,
         )
@@ -589,6 +631,18 @@ async def create_score_request(
         request_id=tracking_id,
         reference_id=body.reference_id,
         status=score_req.status.value,
+        applicant=ApplicantSummary(
+            full_name=body.applicant.full_name,
+            date_of_birth=str(body.applicant.date_of_birth),
+            national_id_number=body.applicant.national_id_number,
+            phone=body.applicant.phone,
+            account_number=body.applicant.account_number,
+        ),
+        loan_request=LoanRequestSummary(
+            amount=body.loan_request.amount,
+            tenure_months=body.loan_request.tenure_months,
+            purpose=body.loan_request.purpose,
+        ),
         scoring_result=score_req.scoring_result,
         timestamps={"requested_at": score_req.created_at.isoformat()},
     )
@@ -620,10 +674,14 @@ async def get_score_request(
     if not score_req:
         raise NotFoundError("Score request", request_id)
 
+    applicant, loan = _extract_summaries(score_req.request_payload or {})
+
     return ScoreRequestResponse(
         request_id=score_req.tracking_id,
         reference_id=score_req.reference_id,
         status=score_req.status.value,
+        applicant=applicant,
+        loan_request=loan,
         scoring_result=score_req.scoring_result,
         timestamps={
             "requested_at": score_req.created_at.isoformat(),
@@ -671,11 +729,21 @@ async def get_scoring_result(
             ),
         )
 
+    # Surface hard-stop decline details if present in scoring_metadata
+    decline_reasons = None
+    triggered_rules = None
+    meta = scoring_result.scoring_metadata
+    if isinstance(meta, dict) and meta.get("hard_stop"):
+        decline_reasons = meta.get("decline_reasons")
+        triggered_rules = meta.get("triggered_rules")
+
     return ScoringResultResponse(
         request_id=scoring_result.request_id,
         decision=scoring_result.decision.value,
         condition_applied=scoring_result.condition_applied,
         scoring_timestamp=scoring_result.scoring_timestamp,
+        decline_reasons=decline_reasons,
+        triggered_rules=triggered_rules,
         credit_risk=scoring_result.credit_risk,
         fraud_detection=scoring_result.fraud_detection,
         loan_amount=scoring_result.loan_amount,
@@ -802,21 +870,28 @@ async def list_score_requests(
     )
     requests = result.scalars().all()
 
-    items = [
-        ScoreRequestSummary(
-            request_id=r.tracking_id,
-            tracking_id=r.tracking_id,
-            reference_id=r.reference_id,
-            status=r.status.value,
-            score_value=r.score_value,
-            risk_category=r.risk_category,
-            request_source=r.request_source.value,
-            created_at=r.created_at,
-            scored_at=r.scored_at,
-            scoring_result=r.scoring_result,
+    items = []
+    for r in requests:
+        payload = r.request_payload or {}
+        applicant_data = payload.get("applicant") or {}
+        loan_data = payload.get("loan_request") or {}
+        items.append(
+            ScoreRequestSummary(
+                request_id=r.tracking_id,
+                tracking_id=r.tracking_id,
+                reference_id=r.reference_id,
+                status=r.status.value,
+                applicant_name=applicant_data.get("full_name"),
+                loan_amount=loan_data.get("amount"),
+                loan_purpose=loan_data.get("purpose"),
+                score_value=r.score_value,
+                risk_category=r.risk_category,
+                request_source=r.request_source.value,
+                created_at=r.created_at,
+                scored_at=r.scored_at,
+                scoring_result=r.scoring_result,
+            )
         )
-        for r in requests
-    ]
 
     return PaginatedResponse.create(
         items=items, total=total, page=page, per_page=per_page
