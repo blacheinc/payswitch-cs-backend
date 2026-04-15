@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -155,6 +156,21 @@ def register_exception_handlers(app: FastAPI) -> None:
                     "details": exc.details,
                 }
             },
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        errors = exc.errors()
+        first = errors[0] if errors else {}
+        # Build a human-readable detail from the first error
+        loc = " → ".join(str(p) for p in first.get("loc", []) if p != "body")
+        msg = first.get("msg", "Validation error")
+        detail = f"{loc}: {msg}" if loc else msg
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": "validation_error", "detail": detail},
         )
 
     @app.exception_handler(IdempotencyConflictError)

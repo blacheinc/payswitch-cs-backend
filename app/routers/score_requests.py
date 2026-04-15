@@ -9,12 +9,13 @@ Updated for the async scoring flow:
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -321,15 +322,8 @@ async def create_score_request(
     payload_dict = body.model_dump(mode="json")
 
     # ── Pre-screening: Hard-stop rules ───────────────────────────────────
-    applicant_age = None
-    if body.applicant.date_of_birth:
-        from datetime import date
-
-        today = date.today()
-        dob = body.applicant.date_of_birth
-        applicant_age = (
-            today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        )
+    # NOTE: age computation is deferred until after reverse mapping (below)
+    # so that feature-overridden age takes precedence over the raw DOB.
 
     # Fetch cached XDS data from the bureau-lookup step so we can evaluate
     # all 7 hard-stop rules. HS-03, HS-05, and HS-06 require fields that
@@ -350,10 +344,70 @@ async def create_score_request(
         except Exception as _e:
             logger.warning(f"[scoring] XDS cache fetch failed: {_e}")
 
+    # Guard: If the bureau lookup was a HIT but the cached XDS data has
+    # expired, we cannot score — the DE needs the raw report.  Reject
+    # immediately with a clear error instead of sending an empty payload
+    # to the DE (which would produce a mysterious DECLINE with null data).
+    if (
+        not _raw_xds_data
+        and body.bureau_data
+        and body.bureau_data.bureau_hit_status == "HIT"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Bureau data cache has expired for this consumer. "
+                "Please re-run bureau-lookup before submitting a score request."
+            ),
+        )
+
+    # Apply reverse mapping from frontend feature modifications BEFORE
+    # hard-stop evaluation so that any overrides (e.g. adjusted age,
+    # toggled judgement) feed into the pre-screening.
+    features = payload_dict.get("bureau_data", {}).get("features")
+    if features and _raw_xds_data:
+        from app.services.xds_reverse_mapper import apply_feature_overrides
+        _raw_xds_data = apply_feature_overrides(_raw_xds_data, features)
+
+    # ── Compute applicant age from reverse-mapped XDS data (primary) ─────
+    # The features may override age, so the reverse-mapped birthDate in
+    # personalDetailsSummary is the authoritative source.  Fall back to
+    # body.applicant.date_of_birth only when XDS data is unavailable.
+    from datetime import date
+
+    applicant_age = None
+    if _raw_xds_data:
+        _p45_pd = (_raw_xds_data.get("product_45") or {}).get("personalDetailsSummary", {})
+        if isinstance(_p45_pd, list) and _p45_pd:
+            _p45_pd = _p45_pd[0]
+        if isinstance(_p45_pd, dict):
+            _bd_str = _p45_pd.get("birthDate", "")
+            if _bd_str:
+                from datetime import datetime as _dt
+                for _fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+                    try:
+                        _bd = _dt.strptime(str(_bd_str).strip()[:10], _fmt).date()
+                        today = date.today()
+                        applicant_age = (
+                            today.year - _bd.year
+                            - ((today.month, today.day) < (_bd.month, _bd.day))
+                        )
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+    # Fallback to applicant DOB if XDS didn't provide a birthDate
+    if applicant_age is None and body.applicant.date_of_birth:
+        today = date.today()
+        dob = body.applicant.date_of_birth
+        applicant_age = (
+            today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+        )
+
     # Build the bureau_data dict for hard-stop evaluation.
     # Start with whatever the client submitted (credit_summary from the
     # bureau lookup form), then overlay authoritative values from the
-    # cached XDS report where available.
+    # reverse-mapped XDS report.
     bureau_data: dict = {}
     if body.bureau_data and body.bureau_data.credit_summary:
         _cs = body.bureau_data.credit_summary
@@ -458,9 +512,10 @@ async def create_score_request(
                 break
 
         # ── Identity confidence (HS-03) ───────────────────────────────────
-        # XDS confirms identity via national ID presence. Use 1.0 = verified,
-        # 0.0 = not verified, matching the identity_verified feature definition.
-        # Check P45 first, fall back to P49.
+        # Combines XDS bureau verification with applicant-submitted data.
+        # 1.0 = XDS has nationalIDNo on file (bureau-verified)
+        # 0.5 = applicant submitted a national_id_number but XDS doesn't have it
+        # 0.0 = neither XDS nor applicant provided an ID
         _personal = _p45.get("personalDetailsSummary", _p45.get("personalDetails", {}))
         if isinstance(_personal, list) and _personal:
             _personal = _personal[0]
@@ -472,7 +527,49 @@ async def create_score_request(
                 _p49_personal = _p49_personal[0]
             if isinstance(_p49_personal, dict) and _p49_personal.get("nationalIDNo"):
                 _personal = _p49_personal
-        identity_confidence = 1.0 if _personal.get("nationalIDNo") else 0.0
+
+        if _personal.get("nationalIDNo"):
+            # Bureau confirms the ID — full confidence
+            identity_confidence = 1.0
+        elif body.applicant.national_id_number:
+            # Applicant submitted an ID but bureau doesn't have it —
+            # self-reported, enough to pass HS-03 (0.70 threshold)
+            identity_confidence = 0.75
+        else:
+            # No ID from either source
+            identity_confidence = 0.0
+
+    # ── Fallback: Use bureau features for any missing hard-stop signals ──
+    # When the reverse mapper has already patched _raw_xds_data (above),
+    # the hard-stop code that parses XDS fields will catch most signals.
+    # This fallback handles the case where there's no XDS cache at all
+    # (e.g. cache expired but guard was bypassed, or NO_RECORD flow).
+    # Features use the frontend convention: truthy = HAS the adverse condition.
+    if body.bureau_data and body.bureau_data.features:
+        _feats = body.bureau_data.features
+
+        # HS-04: Judgement
+        if "total_judgements" not in bureau_data and _feats.has_judgement is not None:
+            if _feats.has_judgement:
+                bureau_data["total_judgements"] = 1
+
+        # HS-05: Written-off
+        if "has_written_off_within_36m" not in bureau_data and _feats.has_written_off is not None:
+            if _feats.has_written_off:
+                bureau_data["has_written_off_within_36m"] = True
+
+        # HS-06: Delinquency rating — raw 0–4 from XDS (4 = Very Poor)
+        if "delinquency_rating" not in bureau_data and _feats.highest_delinquency_rating is not None:
+            bureau_data["delinquency_rating"] = _feats.highest_delinquency_rating
+
+        # HS-03: Identity confidence fallback when XDS cache wasn't available
+        if identity_confidence is None and _feats.identity_verified is not None:
+            if _feats.identity_verified:
+                identity_confidence = 1.0
+            elif body.applicant.national_id_number:
+                identity_confidence = 0.75
+            else:
+                identity_confidence = 0.0
 
     hard_stop_result = evaluate_hard_stops(
         applicant_age=applicant_age,
@@ -561,11 +658,8 @@ async def create_score_request(
     db.add(score_req)
     await db.flush()
 
-    # Apply reverse mapping from any frontend modifications
-    features = payload_dict.get("bureau_data", {}).get("features")
-    if features:
-        from app.services.xds_reverse_mapper import apply_feature_overrides
-        _raw_xds_data = apply_feature_overrides(_raw_xds_data, features)
+    # NOTE: reverse mapping was already applied above (before hard-stops)
+    # so _raw_xds_data is already patched with frontend feature overrides.
 
     try:
         from app.core.events import get_event_publisher
@@ -584,7 +678,8 @@ async def create_score_request(
                 "consumer_mobile_report_49": _raw_xds_data.get("product_49") if _raw_xds_data else None
             }
         }
-        
+
+
         # Publish to the DE Azure Function to trigger inferencing
         async def _publish_to_de_inference(payload: dict):
             import httpx
@@ -627,6 +722,15 @@ async def create_score_request(
         # Wire the relationship so it's available for the response immediately
         score_req.scoring_result = error_result
 
+    # In the success path scoring_result doesn't exist yet (DE runs async),
+    # so avoid triggering a lazy load which would fail in async context.
+    # Only the error path (line 657) wires the relationship explicitly.
+    _sr = (
+        score_req.scoring_result
+        if "scoring_result" in score_req.__dict__
+        else None
+    )
+
     response = ScoreRequestResponse(
         request_id=tracking_id,
         reference_id=body.reference_id,
@@ -643,7 +747,7 @@ async def create_score_request(
             tenure_months=body.loan_request.tenure_months,
             purpose=body.loan_request.purpose,
         ),
-        scoring_result=score_req.scoring_result,
+        scoring_result=_sr,
         timestamps={"requested_at": score_req.created_at.isoformat()},
     )
 

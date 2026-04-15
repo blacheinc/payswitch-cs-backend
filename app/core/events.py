@@ -141,6 +141,12 @@ class EventPublisher:
             settings.azure_servicebus_queue_webhooks, delivery_data
         )
 
+    async def publish_batch_scoring_job(self, job_data: dict[str, Any]) -> None:
+        """Publish a batch scoring job to the batch-score-request topic."""
+        await self._backend.send(
+            settings.azure_servicebus_topic_batch_score_request, job_data
+        )
+
     async def publish(self, topic_name: str, message: dict[str, Any]) -> None:
         """Publish a message to a topic."""
         await self._backend.send(topic_name, message)

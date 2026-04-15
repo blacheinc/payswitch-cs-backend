@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     azure_storage_container_training: str = "training-data"
     azure_storage_container_reports: str = "reports"
 
+    # ── Champion Model Artifacts ─────────────────────────────────────────────
+    # Connection string for the storage account that holds model artifacts.
+    # This may differ from azure_storage_connection_string if ML artifacts
+    # live on a separate storage account.
+    champion_storage_connection_string: str = ""
+    champion_storage_account_name: str = "blachedly27jgavel2x32"
+    champion_storage_container: str = "model-artifacts"
+
+    # ── Orchestrator Function App ────────────────────────────────────────────
+    orchestrator_base_url: str = "https://payswitch-cs-orchestrator.azurewebsites.net"
+    orchestrator_function_key: str = ""
+
     # ── Azure Key Vault ──────────────────────────────────────────────────────
     azure_keyvault_url: str = ""
 
@@ -78,12 +90,19 @@ class Settings(BaseSettings):
     azure_servicebus_topic_scoring_complete: str = "scoring-complete"
     # BE → DE: stub topic for triggering scoring (swap once DE team confirms)
     azure_servicebus_topic_score_applicant: str = "score-applicant"
+    # Batch scoring topics
+    azure_servicebus_topic_batch_score_request: str = "batch-score-request"
+    azure_servicebus_topic_batch_score_complete: str = "batch-score-complete"
     azure_servicebus_sub_backend: str = "backend-sub"
     azure_servicebus_sub_cs_backend: str = "cs-backend"
 
     # DE inference Azure Function
     de_inference_url: str = "https://blache-cdtscr-dev-transform-y27jgavel2x32.azurewebsites.net/api/transform/inference"
     de_inference_code: str = ""
+
+    # Customer Service Function App
+    customer_service_base_url: str = "https://payswitch-cs-customer-service.azurewebsites.net"
+    customer_service_function_key: str = ""
 
     # ── XDS Credit Bureau ────────────────────────────────────────────────────
     xds_username: str = ""

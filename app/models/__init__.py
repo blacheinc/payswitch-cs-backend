@@ -20,3 +20,9 @@ from app.models.score_request import (
 from app.models.scoring_result import ScoringResult  # noqa: F401
 from app.models.user import AdminUser, OrgUser  # noqa: F401
 from app.models.webhook import WebhookConfig, WebhookDelivery  # noqa: F401
+
+# Monitoring models
+from app.models.alert import Alert  # noqa: F401
+from app.models.decision_metric import DecisionMetric  # noqa: F401
+from app.models.model_metric import ModelMetric  # noqa: F401
+from app.models.request_metric import RequestMetric  # noqa: F401

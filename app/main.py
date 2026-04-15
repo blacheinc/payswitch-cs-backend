@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
 
     # Start subscribers
     from app.core.events import get_event_publisher
+    from app.subscribers.batch_complete import handle_batch_score_complete
     from app.subscribers.scoring_complete import handle_scoring_complete
     from app.subscribers.training import handle_model_training_completed
     from app.subscribers.training_started import handle_model_training_started
@@ -55,6 +56,11 @@ async def lifespan(app: FastAPI):
         topic_name=settings.azure_servicebus_topic_scoring_complete,
         subscription_name=settings.azure_servicebus_sub_backend,
         handler=handle_scoring_complete,
+    )
+    event_publisher.subscribe(
+        topic_name=settings.azure_servicebus_topic_batch_score_complete,
+        subscription_name=settings.azure_servicebus_sub_backend,
+        handler=handle_batch_score_complete,
     )
 
     yield
@@ -124,6 +130,17 @@ def create_app() -> FastAPI:
 
     from app.routers.bureau_lookup import router as bureau_lookup_router
     app.include_router(bureau_lookup_router)
+
+    # ── New: Models, Rules, Monitoring ───────────────────────────────────
+    from app.routers.models import router as models_router
+    from app.routers.rules import router as rules_router
+    from app.routers.monitoring import monitoring_router
+    from app.routers.batch_scoring import router as batch_scoring_router
+
+    app.include_router(models_router)
+    app.include_router(rules_router)
+    app.include_router(monitoring_router)
+    app.include_router(batch_scoring_router)
 
     app.include_router(profile_router)
     app.include_router(users_router)

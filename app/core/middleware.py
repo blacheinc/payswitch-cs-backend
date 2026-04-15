@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -10,6 +11,24 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 logger = logging.getLogger(__name__)
+
+# Simple counter — every INFRA_ALERT_EVERY requests we re-evaluate infra alerts.
+# Single-threaded async event loop makes plain int safe here.
+_request_count: int = 0
+INFRA_ALERT_EVERY: int = 50
+
+
+async def _run_infra_alerts() -> None:
+    """Background task: evaluate infra alerts in an isolated session."""
+    try:
+        from app.db import async_session_factory
+        from app.jobs.alert_evaluator import evaluate_infra_alerts
+
+        async with async_session_factory() as db:
+            async with db.begin():
+                await evaluate_infra_alerts(db)
+    except Exception:
+        logger.warning("[middleware] Infra alert evaluation failed", exc_info=True)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -29,6 +48,14 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = request_id
         response.headers["X-Process-Time"] = f"{process_time:.4f}"
 
+        # Record org-agnostic request metrics for infrastructure dashboard
+        try:
+            await self._persist_request_metric(
+                request, response, request_id, response_time_ms
+            )
+        except Exception:
+            logger.warning("Failed to persist request metric", exc_info=True)
+
         # Only log /v1/ organisation-facing routes
         path = request.url.path
         if path.startswith("/v1/"):
@@ -40,6 +67,34 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
                 logger.warning("Failed to persist API log", exc_info=True)
 
         return response
+
+    async def _persist_request_metric(
+        self,
+        request: Request,
+        response: Response,
+        request_id: str,
+        response_time_ms: int,
+    ) -> None:
+        """Write a lightweight RequestMetric row for infrastructure dashboard."""
+        global _request_count
+
+        from app.db import async_session_factory
+        from app.models.request_metric import RequestMetric
+
+        async with async_session_factory() as session:
+            metric = RequestMetric(
+                endpoint=request.url.path[:500],
+                method=request.method,
+                status_code=response.status_code,
+                response_time_ms=response_time_ms,
+                request_id=request_id,
+            )
+            session.add(metric)
+            await session.commit()
+
+        _request_count += 1
+        if _request_count % INFRA_ALERT_EVERY == 0:
+            asyncio.create_task(_run_infra_alerts())
 
     async def _persist_api_log(
         self,
@@ -85,3 +140,4 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             )
             session.add(log_entry)
             await session.commit()
+

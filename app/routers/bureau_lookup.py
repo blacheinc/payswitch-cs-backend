@@ -52,35 +52,68 @@ async def bureau_lookup(
 ) -> BureauLookupResponse:
     """Call XDS Credit Bureau and return structured bureau data."""
 
-    xds = get_xds_client()
+    # ── Check cache first to avoid redundant XDS API calls ────────────
+    import json as _json
+    from app.storage.cache import get_redis_cache
 
-    try:
-        result = await xds.full_bureau_lookup(
-            consumer_name=body.full_name,
-            date_of_birth=body.date_of_birth,
-            identification=body.identification,
-            phone_number=body.phone_number,
-            account_number=body.account_number,
-            enquiry_reason=body.enquiry_reason,
-        )
-    except XDSError as e:
-        logger.error(f"[bureau-lookup] XDS API error: {e.message}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Credit bureau lookup failed: {e.message}",
-        )
-    except httpx.TimeoutException:
-        logger.error("[bureau-lookup] Connection timeout reaching XDS API")
-        raise HTTPException(
-            status_code=504,
-            detail="Credit bureau API is unreachable (connection timeout)",
-        )
-    except Exception as e:
-        logger.exception("[bureau-lookup] Unexpected error")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal error during bureau lookup: {type(e).__name__}: {e}",
-        )
+    _cached_result: dict | None = None
+    _cache_lookup_id = body.identification or body.phone_number
+    _cache_key_id = f"bureau:id:{_cache_lookup_id}" if _cache_lookup_id else None
+
+    if _cache_key_id:
+        try:
+            _cache = get_redis_cache()
+            _cached_bytes = await _cache.get(_cache_key_id)
+            if _cached_bytes:
+                _cached_result = _json.loads(_cached_bytes)
+                logger.info(f"[bureau-lookup] Cache HIT for {_cache_key_id} — skipping XDS API call")
+        except Exception as e:
+            logger.warning(f"[bureau-lookup] Cache check failed: {e}")
+
+    if _cached_result:
+        # Reconstruct the result dict from cached data
+        result = {
+            "product_45": {
+                "status": "HIT" if _cached_result.get("product_45") else "NO_RECORD",
+                "report": _cached_result.get("product_45", {}),
+                "matches": [_cached_result.get("product_45", {}).get("personalDetailsSummary", {})],
+            },
+            "product_49": {
+                "status": "HIT" if _cached_result.get("product_49") else "NO_RECORD",
+                "report": _cached_result.get("product_49", {}),
+                "matches": [_cached_result.get("product_49", {}).get("personalDetailsSummary", {})],
+            },
+        }
+    else:
+        xds = get_xds_client()
+
+        try:
+            result = await xds.full_bureau_lookup(
+                consumer_name=body.full_name,
+                date_of_birth=body.date_of_birth,
+                identification=body.identification,
+                phone_number=body.phone_number,
+                account_number=body.account_number,
+                enquiry_reason=body.enquiry_reason,
+            )
+        except XDSError as e:
+            logger.error(f"[bureau-lookup] XDS API error: {e.message}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Credit bureau lookup failed: {e.message}",
+            )
+        except httpx.TimeoutException:
+            logger.error("[bureau-lookup] Connection timeout reaching XDS API")
+            raise HTTPException(
+                status_code=504,
+                detail="Credit bureau API is unreachable (connection timeout)",
+            )
+        except Exception as e:
+            logger.exception("[bureau-lookup] Unexpected error")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Internal error during bureau lookup: {type(e).__name__}: {e}",
+            )
 
     # Each product is an independent flow
     p45_data = result.get("product_45", {})
@@ -136,31 +169,53 @@ async def bureau_lookup(
     personal = _extract_personal_details(p45_report, primary_match)
     credit_summary = _extract_credit_summary(p45_report)
     credit_accounts = _extract_credit_accounts(p45_report, p49_report)
-    features = _extract_features(p45_report, p49_report, body.date_of_birth)
+    features = _extract_features(p45_report, p49_report)
 
-    applicant_age = _compute_age(body.date_of_birth)
-    consumer_id = str(primary_match.get("consumerID", ""))
+    applicant_age = features.applicant_age
+    # Extract consumer_id from the report (available in both live and cached paths)
+    _p45_personal = p45_report.get("personalDetailsSummary", {})
+    if isinstance(_p45_personal, list) and _p45_personal:
+        _p45_personal = _p45_personal[0]
+    _p49_personal = p49_report.get("personalDetailsSummary", {})
+    if isinstance(_p49_personal, list) and _p49_personal:
+        _p49_personal = _p49_personal[0]
+    consumer_id = str(
+        (_p45_personal or {}).get("consumerID", "")
+        or (_p49_personal or {}).get("consumerID", "")
+        or primary_match.get("consumerID", "")
+    )
     metadata = BureauMetadata(
         bureau_hit_status="HIT",
         product_source=product_source,
         applicant_age_at_application=applicant_age,
     )
 
-    # Cache raw XDS reports for the score-request → DE flow
+    # Cache raw XDS reports for both the score-request flow (by consumer_id)
+    # and the cache-first bureau lookup (by identification/national ID)
     try:
-        import json
-        from app.storage.cache import get_redis_cache
+        _cache = get_redis_cache()
+        _xds_json = _json.dumps({"product_45": p45_report, "product_49": p49_report})
+        _ttl = 86400  # 24 hour TTL — must outlast the review window
 
-        cache = get_redis_cache()
+        # Primary key: by consumer_id (used by score-request → DE flow)
         cache_key = f"bureau:{consumer_id}"
-        await cache.set(
-            cache_key,
-            json.dumps({"product_45": p45_report, "product_49": p49_report}),
-            ttl=3600,  # 1 hour TTL
-        )
+        await _cache.set(cache_key, _xds_json, ttl=_ttl)
+
+        # Secondary key: by identification/phone (used for cache-first lookups)
+        if _cache_lookup_id:
+            await _cache.set(f"bureau:id:{_cache_lookup_id}", _xds_json, ttl=_ttl)
+
         logger.debug(f"[bureau-lookup] Cached raw XDS data as {cache_key}")
     except Exception as e:
         logger.warning(f"[bureau-lookup] Failed to cache raw XDS data: {e}")
+
+    # Extract enquiry_id from the report (available in both live and cached paths)
+    _enquiry_details = p45_report.get("enquiryDetails", {}) or p49_report.get("enquiryDetails", {})
+    if isinstance(_enquiry_details, list) and _enquiry_details:
+        _enquiry_details = _enquiry_details[0]
+    if not isinstance(_enquiry_details, dict):
+        _enquiry_details = {}
+    _enquiry_id = str(_enquiry_details.get("subscriberEnquiryResultID", ""))
 
     return BureauLookupResponse(
         bureau_hit_status="HIT",
@@ -170,7 +225,7 @@ async def bureau_lookup(
         credit_accounts=credit_accounts,
         features=features,
         metadata=metadata,
-        enquiry_id=str(primary_match.get("enquiryID", "")) if primary_match.get("enquiryID") else "",
+        enquiry_id=_enquiry_id,
         consumer_id=consumer_id,
     )
 
@@ -325,18 +380,15 @@ def _extract_credit_accounts(
 
 
 def _extract_features(
-    p45: dict[str, Any], p49: dict[str, Any], dob: date
+    p45: dict[str, Any], p49: dict[str, Any]
 ) -> BureauFeatures:
-    """Extract and compute the 30 pre-binned features from bureau data.
+    """Extract the 30 raw feature values exclusively from XDS product 45/49.
 
-    Note: In the full pipeline, the Data Engineer handles binning.
-    This provides a preliminary feature extraction for display and
-    for passing to the DE via the score request.
-
-    Product 45 stores accounts in ``creditAgreementSummary[]``.
-    Product 49 stores accounts in ``detailedFacilityInfo[]``.
-    Both use the same field names for account-level data.
+    ALL data comes from the XDS report — nothing from the request body.
+    Values are raw (not binned) — the DE pipeline handles normalisation.
+    See docs/de_feature_mapping.md for the full forward/reverse mapping.
     """
+    from datetime import datetime as _dt, timedelta
     # ── Summary data (prefer P45, fall back to P49) ─────────────────────
     summary = p45.get("creditAccountSummary", p45.get("creditAccountSummaryGHS", {}))
     if isinstance(summary, list) and summary:
@@ -359,6 +411,9 @@ def _extract_features(
     elif not isinstance(delinquency_obj, dict):
         delinquency_obj = {}
 
+    # Pass through the raw XDS delinquency rating string as-is
+    del_raw = str(delinquency_obj.get("highestDelinquencyRating", "")).strip() or None
+
     # ── Combine all accounts from both products ─────────────────────────
     # P45: creditAgreementSummary[], P49: detailedFacilityInfo[]
     accounts_raw: list[dict[str, Any]] = []
@@ -369,6 +424,7 @@ def _extract_features(
     if isinstance(p49_accounts, list):
         accounts_raw.extend(a for a in p49_accounts if isinstance(a, dict))
 
+    
     personal = p45.get("personalDetailsSummary", p45.get("personalDetails", {}))
     if isinstance(personal, list) and personal:
         personal = personal[0]
@@ -382,82 +438,160 @@ def _extract_features(
         if isinstance(p49_personal, dict) and p49_personal.get("nationalIDNo"):
             personal = p49_personal
 
-    # Compute raw values (pre-binning — DE will re-bin these properly)
-    # Use P45 summary fields first, fall back to P49 where P45 is empty.
-    total_accounts = (
-        _safe_int(summary.get("totalNumberofAccountsGHS"))
-        or _safe_int(p49_summary.get("totalNumberofAccountsGHS"))
-        or 0
+    # applicant_age — rename of 45:personalDetailsSummary.birthDate (raw string)
+    applicant_age_raw = str(personal.get("birthDate", "")).strip() or None
+
+    # ── str passthrough features — raw XDS strings for reverse mapping ──
+    # num_dependants — raw from 45:personalDetailsSummary.dependants
+    num_dependants_raw = str(personal.get("dependants", "")).strip() or None
+    # identity_verified — raw from 45:personalDetailsSummary.nationalIDNo
+    identity_verified_raw = str(personal.get("nationalIDNo", "")).strip()
+    # has_employer_detail — raw from 45:personalDetailsSummary.employerDetail
+    has_employer_detail_raw = str(personal.get("employerDetail", "")).strip()
+
+    # Credit account summary — pass raw XDS strings (prefer P45, fall back P49)
+    total_accounts_raw = (
+        summary.get("totalNumberofAccountsGHS")
+        or p49_summary.get("totalNumberofAccountsGHS")
+        or None
     )
+    active_accounts_raw = (
+        summary.get("totalActiveAccountsGHS")
+        or p49_summary.get("totalNumberofActiveAccountsGHS")
+        or None
+    )
+    arrear_accounts_raw = (
+        summary.get("totalAccountInArrearGHS")
+        or p49_summary.get("totalAccountarrear")
+        or None
+    )
+    total_debt_raw = (
+        summary.get("totalOutstandingdebtGHS")
+        or p49_summary.get("totalOutstandingdebt")
+        or None
+    )
+    total_arrear_raw = (
+        summary.get("totalAmountInArrearGHS")
+        or p49_summary.get("amountarrear")
+        or None
+    )
+    # total_monthly_instalment_ghs — P45 value (str); if P49 also has one, keep P45
+    instalment_raw = (
+        summary.get("totalMonthlyInstalmentGHS")
+        or p49_summary.get("totalMonthlyInstalment")
+        or None
+    )
+
+    # num_bounced_cheques — raw string, with 45:dudCheqEventSummary fallback
+    bounced_raw = summary.get("totalNumberofDishonouredGHS")
+    if bounced_raw is not None and _safe_int(bounced_raw) == 0:
+        dud_cheques = p45.get("dudCheqEventSummary", [])
+        if isinstance(dud_cheques, list) and len(dud_cheques) > 0:
+            bounced_raw = str(len(dud_cheques))
+
+    # For computed values that still need parsed numbers
     good_accounts = (
         _safe_int(summary.get("totalaccountinGoodconditionGHS"))
         or _safe_int(p49_summary.get("totalaccountinGodcondition"))
         or 0
     )
-    arrear_accounts = (
-        _safe_int(summary.get("totalAccountInArrearGHS"))
-        or _safe_int(p49_summary.get("totalAccountarrear"))
-        or 0
-    )
-    total_debt = (
-        _safe_float(summary.get("totalOutstandingdebtGHS"))
-        or _safe_float(p49_summary.get("totalOutstandingdebt"))
-        or 0
-    )
-    total_arrear = (
-        _safe_float(summary.get("totalAmountInArrearGHS"))
-        or _safe_float(p49_summary.get("amountarrear"))
-        or 0
-    )
-    total_instalment = (
-        _safe_float(summary.get("totalMonthlyInstalmentGHS"))
-        or _safe_float(p49_summary.get("totalMonthlyInstalment"))
-        or 0
-    )
-    judgements = _safe_int(summary.get("totalNumberofJudgementGHS")) or 0
-    bounced = _safe_int(summary.get("totalNumberofDishonouredGHS")) or 0
+
+    # has_judgement — from 45:judgementSummary (non-empty array)
+    judgement_list = p45.get("judgementSummary", [])
+    has_judgement_val = 1 if (isinstance(judgement_list, list) and len(judgement_list) > 0) else 0
 
     # Check account statuses across BOTH products
-    has_written = any(
-        a.get("accountStatusCode") == "W"
-        for a in accounts_raw
-    )
-    has_charged = any(
-        a.get("accountStatusCode") == "G"
-        for a in accounts_raw
-    )
-    has_legal = any(
-        a.get("accountStatusCode") == "L"
-        for a in accounts_raw
+    has_written = any(a.get("accountStatusCode") == "W" for a in accounts_raw)
+    has_charged = any(a.get("accountStatusCode") == "G" for a in accounts_raw)
+    has_legal = any(a.get("accountStatusCode") == "L" for a in accounts_raw)
+
+    # num_closed_accounts_good — closed with non-adverse status + closedDate
+    bad_statuses = {"W", "G", "L"}
+    closed_good = sum(
+        1 for a in accounts_raw
+        if a.get("closedDate") and a.get("accountStatusCode") not in bad_statuses
     )
 
-    # XDS docs specify text values: "Good", "Fairly Good", "Poor", "Very Poor"
-    # Real API returns numeric strings: "0" = good through "4" = worst.
-    # Values above 4 (e.g. "10") are per-account delinquency months, not the
-    # categorical rating — default to 0.5 for unrecognised values.
-    del_rating_str = str(delinquency_obj.get("highestDelinquencyRating", "")).strip().lower()
-    delinquency_map = {
-        # Official text values (from XDS API docs v2)
-        "good": 1.0,
-        "fairly good": 0.75,
-        "poor": 0.35,
-        "very poor": 0.0,
-        # Numeric fallback (observed in real API responses)
-        "0": 1.0, "1": 0.75, "2": 0.50, "3": 0.25, "4": 0.0,
-    }
-    del_score = delinquency_map.get(del_rating_str, 0.5)
-
-    # Count product types for diversity (both products)
+    # product_diversity_score — unique types via accountType/loanType/subscriberName
     product_types = set()
     for a in accounts_raw:
-        if a.get("indicatorDescription"):
-            product_types.add(a["indicatorDescription"])
+        ptype = a.get("accountType") or a.get("loanType") or a.get("subscriberName") or a.get("indicatorDescription")
+        if ptype:
+            product_types.add(ptype)
 
-    # Defaults / adverse — real API uses "defaults" and "adverseDetails" keys
-    defaults_raw = p45.get("defaults", p45.get("adverseDetails", []))
-    has_adverse = len(defaults_raw) > 0 if isinstance(defaults_raw, list) else False
+    # has_adverse_default — from 45:defaults OR 45:adverseDetails (non-empty)
+    defaults_raw = p45.get("defaults", [])
+    adverse_raw = p45.get("adverseDetails", [])
+    has_adverse = (
+        (isinstance(defaults_raw, list) and len(defaults_raw) > 0)
+        or (isinstance(adverse_raw, list) and len(adverse_raw) > 0)
+    )
 
-    # Enquiry history — combine both products, deduplicate by ID
+    # ── Payment history features (45:accountMonthlyPaymentHistory) ──────
+    # m01–m24: "#" = not reported, "0" = on time, "1"+ = months in arrears
+    payment_histories = p45.get("accountMonthlyPaymentHistory", [])
+    if not isinstance(payment_histories, list):
+        payment_histories = []
+
+    all_monthly: list[int | None] = []
+    for ph in payment_histories:
+        if not isinstance(ph, dict):
+            continue
+        for i in range(1, 25):
+            val = str(ph.get(f"m{i:02d}", "#")).strip()
+            if val in ("#", "", "None"):
+                all_monthly.append(None)
+            else:
+                try:
+                    all_monthly.append(int(val))
+                except ValueError:
+                    all_monthly.append(None)
+
+    reported = [s for s in all_monthly if s is not None]
+    months_on_time = sum(1 for s in reported if s == 0) if reported else None
+
+    # worst_arrears_24m — find max monthsInArrears across all accounts, return raw string
+    worst_arrears_int: int | None = max(reported) if reported else None
+    for a in accounts_raw:
+        mia = _safe_int(a.get("monthsInArrears"))
+        if mia is not None:
+            worst_arrears_int = max(worst_arrears_int or 0, mia)
+    worst_arrears_raw = str(worst_arrears_int) if worst_arrears_int is not None else None
+
+    current_streak: int | None = None
+    if reported:
+        current_streak = 0
+        for s in all_monthly:
+            if s == 0:
+                current_streak += 1
+            elif s is None:
+                continue
+            else:
+                break
+
+    # ── Utilisation ratio ───────────────────────────────────────────────
+    total_opening = sum((_safe_float(a.get("openingBalanceAmt")) or 0) for a in accounts_raw)
+    total_current = sum((_safe_float(a.get("currentBalanceAmt")) or 0) for a in accounts_raw)
+    utilisation_ratio = round(total_current / total_opening, 4) if total_opening > 0 else None
+
+    # ── Credit age — oldest dateAccountOpened raw string ─────────────────
+    credit_age_raw: str | None = None
+    oldest_date = None
+    for a in accounts_raw:
+        opened_str = a.get("dateAccountOpened", "")
+        if not opened_str:
+            continue
+        for _fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                opened_date = _dt.strptime(str(opened_str).strip()[:10], _fmt).date()
+                if oldest_date is None or opened_date < oldest_date:
+                    oldest_date = opened_date
+                    credit_age_raw = str(opened_str).strip()
+                break
+            except (ValueError, TypeError):
+                continue
+
+    # ── Enquiry history — combine both products, deduplicate by ID ──────
     enquiries = p45.get("enquiryHistory", [])
     if not isinstance(enquiries, list):
         enquiries = []
@@ -468,61 +602,88 @@ def _extract_features(
             if isinstance(e, dict) and e.get("subscriberEnquiryResultID") not in seen_ids:
                 enquiries.append(e)
 
+    _today = date.today()
+    _3m_ago = _today - timedelta(days=90)
+    _12m_ago = _today - timedelta(days=365)
+    enquiries_3m = 0
+    enquiries_12m = 0
+    for eq in enquiries:
+        if not isinstance(eq, dict):
+            continue
+        eq_date_str = eq.get("dateRequested", "")
+        eq_date = None
+        for _fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%d"):
+            try:
+                eq_date = _dt.strptime(str(eq_date_str).strip()[:19], _fmt).date()
+                break
+            except (ValueError, TypeError):
+                continue
+        if eq_date:
+            if eq_date >= _3m_ago:
+                enquiries_3m += 1
+            if eq_date >= _12m_ago:
+                enquiries_12m += 1
+
+
+
+
+    # ── Address stability (45:addressHistory) ───────────────────────────
+    address_history = p45.get("addressHistory", [])
+    address_stability: int | None = None
+    if isinstance(address_history, list) and address_history:
+        unique_addrs = set()
+        for ah in address_history:
+            if not isinstance(ah, dict):
+                continue
+            addr = ah.get("address") or ah.get("address1", "")
+            if addr and str(addr).strip():
+                unique_addrs.add(str(addr).strip().upper())
+        address_stability = len(unique_addrs) if unique_addrs else None
+
     # ── Mobile loan features from Product 49 ────────────────────────────
-    mobile_loan_count: float | None = None
-    mobile_max_loan: float | None = None
+    mobile_loan_count: int | None = None
     if p49_accounts and isinstance(p49_accounts, list):
         mobile_accts = [a for a in p49_accounts if isinstance(a, dict)]
         if mobile_accts:
-            mobile_loan_count = min(len(mobile_accts) / 20, 1.0)
-            max_amt = max(
-                (_safe_float(a.get("openingBalanceAmt")) or 0) for a in mobile_accts
-            )
-            mobile_max_loan = min(max_amt / 5000, 1.0) if max_amt else 0.0
-
-    age = _compute_age(dob)
+            mobile_loan_count = len(mobile_accts)
+    # mobile_max_loan_ghs — raw string from 49:creditAccountSummary.highestAmountTaken
+    mobile_max_loan_raw = p49_summary.get("highestAmountTaken") if p49_summary else None
 
     return BureauFeatures(
-        highest_delinquency_rating=del_score,
-        has_active_arrears=0.0 if arrear_accounts > 0 else 1.0,
-        total_arrear_amount_ghs=max(0.0, 1.0 - min(total_arrear / 10000, 1.0)) if total_arrear else 1.0,
-        total_outstanding_debt_ghs=max(0.0, 1.0 - min(total_debt / 100000, 1.0)) if total_debt else 1.0,
-        num_active_accounts=min(total_accounts / 10, 1.0) if total_accounts else 0.0,
-        total_monthly_instalment_ghs=max(0.0, 1.0 - min(total_instalment / 5000, 1.0)) if total_instalment else 1.0,
-        num_accounts_total=min(total_accounts / 15, 1.0) if total_accounts else 0.0,
-        num_closed_accounts_good=min(good_accounts / 10, 1.0) if good_accounts else 0.0,
-        product_diversity_score=min(len(product_types) / 5, 1.0),
-        has_judgement=0.0 if judgements > 0 else 1.0,
-        has_written_off=0.0 if has_written else 1.0,
-        has_charged_off=0.0 if has_charged else 1.0,
-        has_legal_handover=0.0 if has_legal else 1.0,
-        num_bounced_cheques=max(0.0, 1.0 - min(bounced / 5, 1.0)) if bounced else 1.0,
-        has_adverse_default=0.0 if has_adverse else 1.0,
-        num_enquiries_12m=max(0.0, 1.0 - min(len(enquiries) / 10, 1.0)),
-        num_enquiries_3m=max(0.0, 1.0 - min(len(enquiries) / 5, 1.0)),
-        applicant_age=min(max(0.0, (age - 18) / 57), 1.0) if age else None,
-        identity_verified=1.0 if personal.get("nationalIDNo") else 0.0,
-        has_employer_detail=1.0 if personal.get("employerDetail") else 0.60,
-        num_dependants=None,  # Comes from application
-        # Placeholder values — DE will compute from payment history
-        months_on_time_24m=None,
-        worst_arrears_24m=None,
-        current_streak_on_time=None,
-        utilisation_ratio=None,
-        credit_age_months=None,
-        mobile_loan_history_count=mobile_loan_count,
-        mobile_max_loan_ghs=mobile_max_loan,
-        enquiry_reason_flags=None,
-        address_stability=None,
+        # ── All features are str — renames of XDS fields ──────────────
+        highest_delinquency_rating=del_raw,
+        has_active_arrears=arrear_accounts_raw,
+        total_arrear_amount_ghs=total_arrear_raw,
+        total_outstanding_debt_ghs=total_debt_raw,
+        num_active_accounts=active_accounts_raw,
+        total_monthly_instalment_ghs=instalment_raw,
+        num_accounts_total=total_accounts_raw,
+        num_bounced_cheques=bounced_raw,
+        mobile_max_loan_ghs=mobile_max_loan_raw,
+        worst_arrears_24m=worst_arrears_raw,
+        num_dependants=num_dependants_raw,
+        identity_verified=identity_verified_raw,
+        has_employer_detail=has_employer_detail_raw,
+        applicant_age=applicant_age_raw,
+        credit_age_months=credit_age_raw,
+        months_on_time_24m=str(months_on_time) if months_on_time is not None else None,
+        current_streak_on_time=str(current_streak) if current_streak is not None else None,
+        utilisation_ratio=str(utilisation_ratio) if utilisation_ratio is not None else None,
+        num_closed_accounts_good=str(closed_good),
+        product_diversity_score=str(len(product_types)),
+        mobile_loan_history_count=str(mobile_loan_count) if mobile_loan_count is not None else None,
+        has_judgement=str(has_judgement_val),
+        has_written_off=has_written,
+        has_charged_off=has_charged,
+        has_legal_handover=has_legal,
+        has_adverse_default=has_adverse,
+        num_enquiries_3m=str(enquiries_3m),
+        num_enquiries_12m=str(enquiries_12m),
+        enquiry_reason_flags="1" if len(enquiries) > 0 else "0",
+        address_stability=str(address_stability) if address_stability is not None else None,
     )
 
 
-def _compute_age(dob: date) -> int | None:
-    """Compute age from date of birth."""
-    if not dob:
-        return None
-    today = date.today()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
 
 def _safe_int(val: Any) -> int | None:

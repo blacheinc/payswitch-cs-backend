@@ -36,75 +36,49 @@ class BureauLookupRequest(BaseModel):
 
 
 class BureauFeatures(BaseModel):
-    """All 30 features as defined in the contract.
+    """All 30 features as defined in the DE contract.
 
-    Values are typically pre-binned to 0-1 scale by the bureau-lookup
-    endpoint, but the DE pipeline or raw bureau data may produce values
-    outside that range (e.g. negative arrear amounts from overpayments).
-    Constraints are intentionally relaxed so validation doesn't reject
-    legitimate bureau data — normalization happens downstream in the DE.
+    Types are matched to the XDS source data so values roundtrip cleanly
+    through the reverse mapper:
+      • str  – direct passthrough from a single XDS field (same format)
+      • int  – computed counts, binary flags, derived values
+      • float – computed ratios
+    See docs/de_feature_mapping.md for the full XDS → feature mapping.
     """
-    # highest_delinquency_rating: float | None = Field(default=None, ge=0, le=1)
-    # months_on_time_24m: float | None = Field(default=None, ge=0, le=1)
-    # worst_arrears_24m: float | None = Field(default=None, ge=0, le=1)
-    # current_streak_on_time: float | None = Field(default=None, ge=0, le=1)
-    # has_active_arrears: float | None = Field(default=None, ge=0, le=1)
-    # total_arrear_amount_ghs: float | None = Field(default=None, ge=0, le=1)
-    # total_outstanding_debt_ghs: float | None = Field(default=None, ge=0, le=1)
-    # utilisation_ratio: float | None = Field(default=None, ge=0, le=1)
-    # num_active_accounts: float | None = Field(default=None, ge=0, le=1)
-    # total_monthly_instalment_ghs: float | None = Field(default=None, ge=0, le=1)
-    # credit_age_months: float | None = Field(default=None, ge=0, le=1)
-    # num_accounts_total: float | None = Field(default=None, ge=0, le=1)
-    # num_closed_accounts_good: float | None = Field(default=None, ge=0, le=1)
-    # product_diversity_score: float | None = Field(default=None, ge=0, le=1)
-    # mobile_loan_history_count: float | None = Field(default=None, ge=0, le=1)
-    # mobile_max_loan_ghs: float | None = Field(default=None, ge=0, le=1)
-    # has_judgement: float | None = Field(default=None, ge=0, le=1)
-    # has_written_off: float | None = Field(default=None, ge=0, le=1)
-    # has_charged_off: float | None = Field(default=None, ge=0, le=1)
-    # has_legal_handover: float | None = Field(default=None, ge=0, le=1)
-    # num_bounced_cheques: float | None = Field(default=None, ge=0, le=1)
-    # has_adverse_default: float | None = Field(default=None, ge=0, le=1)
-    # num_enquiries_3m: float | None = Field(default=None, ge=0, le=1)
-    # num_enquiries_12m: float | None = Field(default=None, ge=0, le=1)
-    # enquiry_reason_flags: float | None = Field(default=None, ge=0, le=1)
-    # applicant_age: float | None = Field(default=None, ge=0, le=1)
-    # identity_verified: float | None = Field(default=None, ge=0, le=1)
-    # num_dependants: float | None = Field(default=None, ge=0, le=1)
-    # has_employer_detail: float | None = Field(default=None, ge=0, le=1)
-    # address_stability: float | None = Field(default=None, ge=0, le=1)
 
-    highest_delinquency_rating: float | None = None
-    months_on_time_24m: float | None = None
-    worst_arrears_24m: float | None = None
-    current_streak_on_time: float | None = None
-    has_active_arrears: float | None = None
-    total_arrear_amount_ghs: float | None = None
-    total_outstanding_debt_ghs: float | None = None
-    utilisation_ratio: float | None = None
-    num_active_accounts: float | None = None
-    total_monthly_instalment_ghs: float | None = None
-    credit_age_months: float | None = None
-    num_accounts_total: float | None = None
-    num_closed_accounts_good: float | None = None
-    product_diversity_score: float | None = None
-    mobile_loan_history_count: float | None = None
-    mobile_max_loan_ghs: float | None = None
-    has_judgement: float | None = None
-    has_written_off: float | None = None
-    has_charged_off: float | None = None
-    has_legal_handover: float | None = None
-    num_bounced_cheques: float | None = None
-    has_adverse_default: float | None = None
-    num_enquiries_3m: float | None = None
-    num_enquiries_12m: float | None = None
-    enquiry_reason_flags: float | None = None
-    applicant_age: float | None = None
-    identity_verified: float | None = None
-    num_dependants: float | None = None
-    has_employer_detail: float | None = None
-    address_stability: float | None = None
+    # ── Direct from XDS fields (str passthrough for reverse mapping) ─────
+    highest_delinquency_rating: str | None = None           # 45:highestDelinquencyRating.highestDelinquencyRating → "1" / "Good"
+    has_active_arrears: str | None = None                   # 45:creditAccountSummary.totalAccountInArrearGHS → "2"
+    total_arrear_amount_ghs: str | None = None              # 45:creditAccountSummary.totalAmountInArrearGHS → "1,525.00"
+    total_outstanding_debt_ghs: str | None = None           # 45:creditAccountSummary.totalOutstandingdebtGHS → "3,890.00"
+    num_active_accounts: str | None = None                  # 45:creditAccountSummary.totalActiveAccountsGHS → "2"
+    total_monthly_instalment_ghs: str | None = None         # 45+49 creditAccountSummary instalment → "0.00"
+    num_accounts_total: str | None = None                   # 45:creditAccountSummary.totalNumberofAccountsGHS → "3"
+    num_bounced_cheques: str | None = None                  # 45:creditAccountSummary.totalNumberofDishonouredGHS → "0"
+    mobile_max_loan_ghs: str | None = None                  # 49:creditAccountSummary.highestAmountTaken → "153.00"
+    worst_arrears_24m: str | None = None                    # max of creditAgreementSummary[].monthsInArrears → "14"
+    num_dependants: str | None = None                       # 45:personalDetailsSummary.dependants → "0"
+    identity_verified: str | None = None                    # 45:personalDetailsSummary.nationalIDNo → "" or "RJB7045308753"
+    has_employer_detail: str | None = None                   # 45:personalDetailsSummary.employerDetail → "MOE" or ""
+
+    # ── Renamed from XDS fields (aggregated from arrays, still str) ──────
+    applicant_age: str | None = None                        # 45:personalDetailsSummary.birthDate → "15/05/1990"
+    credit_age_months: str | None = None                    # oldest 45:creditAgreementSummary[].dateAccountOpened → "02/02/2018"
+    months_on_time_24m: str | None = None                   # count of "0" in m01–m24 → "18"
+    current_streak_on_time: str | None = None               # consecutive on-time from m01 → "0"
+    utilisation_ratio: str | None = None                    # currentBalance / openingBalance → "0.3402"
+    num_closed_accounts_good: str | None = None             # count: closedDate + non-adverse status → "6"
+    product_diversity_score: str | None = None              # count of unique account types → "5"
+    mobile_loan_history_count: str | None = None            # len(49:detailedFacilityInfo) → "3"
+    has_judgement: str | None = None                         # 1 if judgementSummary non-empty → "0" / "1"
+    has_written_off: bool | None = None                     # True if any accountStatusCode == "W"
+    has_charged_off: bool | None = None                     # True if any accountStatusCode == "G"
+    has_legal_handover: bool | None = None                  # True if any accountStatusCode == "L"
+    has_adverse_default: bool | None = None                 # True if defaults/adverseDetails non-empty
+    num_enquiries_3m: str | None = None                     # count within last 90 days → "2"
+    num_enquiries_12m: str | None = None                    # count within last 365 days → "3"
+    enquiry_reason_flags: str | None = None                 # 1 if any enquiries exist → "0" / "1"
+    address_stability: str | None = None                    # count of unique addresses → "5"
 
 
 # ── Bureau Metadata ─────────────────────────────────────────────────────────
@@ -128,8 +102,8 @@ class BureauMetadata(BaseModel):
     product_source: str | None = Field(
         default=None, description="45, 49, 45+49"
     )
-    applicant_age_at_application: int | None = None
-    credit_age_months_at_application: int | None = None
+    applicant_age_at_application: str | None = None
+    credit_age_months_at_application: str | None = None
 
 
 # ── Bureau Lookup Response ──────────────────────────────────────────────────
@@ -219,35 +193,34 @@ class BureauLookupResponse(BaseModel):
 # ── Default Feature Values for NO_RECORD ────────────────────────────────────
 
 NO_RECORD_DEFAULT_FEATURES = BureauFeatures(
-    highest_delinquency_rating=0.00,
-    months_on_time_24m=0.00,
-    worst_arrears_24m=0.00,
-    current_streak_on_time=0.20,
-    has_active_arrears=0.00,
-    total_arrear_amount_ghs=1.00,
-    total_outstanding_debt_ghs=1.00,
-    utilisation_ratio=1.00,
-    num_active_accounts=0.15,
-    total_monthly_instalment_ghs=1.00,
-    credit_age_months=0.15,
-    num_accounts_total=0.00,
-    num_closed_accounts_good=0.10,
-    product_diversity_score=0.30,
-    mobile_loan_history_count=0.20,
-    mobile_max_loan_ghs=0.00,
-    has_judgement=0.00,
-    has_written_off=0.00,
-    has_charged_off=0.00,
-    has_legal_handover=0.00,
-    num_bounced_cheques=0.00,
-    has_adverse_default=0.00,
-    num_enquiries_3m=1.00,
-    num_enquiries_12m=1.00,
-    enquiry_reason_flags=0.00,
-    # These 5 come from the application, not XDS
-    applicant_age=None,
-    identity_verified=None,
+    highest_delinquency_rating=None,
+    has_active_arrears="0",
+    total_arrear_amount_ghs="0.00",
+    total_outstanding_debt_ghs="0.00",
+    num_active_accounts="0",
+    total_monthly_instalment_ghs="0.00",
+    num_accounts_total="0",
+    num_bounced_cheques="0",
+    mobile_max_loan_ghs=None,
+    worst_arrears_24m=None,
     num_dependants=None,
+    identity_verified=None,
     has_employer_detail=None,
+    applicant_age=None,
+    credit_age_months=None,
+    months_on_time_24m=None,
+    current_streak_on_time=None,
+    utilisation_ratio=None,
+    num_closed_accounts_good="0",
+    product_diversity_score="0",
+    mobile_loan_history_count=None,
+    has_judgement="0",
+    has_written_off=False,
+    has_charged_off=False,
+    has_legal_handover=False,
+    has_adverse_default=False,
+    num_enquiries_3m="0",
+    num_enquiries_12m="0",
+    enquiry_reason_flags=None,
     address_stability=None,
 )

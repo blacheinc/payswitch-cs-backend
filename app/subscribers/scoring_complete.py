@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 async def handle_scoring_complete(message: dict[str, Any]) -> None:
+
+    print(message)
+
     """Process a scoring-complete message from the AI orchestrator.
 
     Expected payload:
@@ -111,15 +114,17 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                 # Denormalize key fields for fast queries
                 credit_risk = message.get("credit_risk", {})
                 if credit_risk:
-                    pd_value = credit_risk.get("probability_of_default")
-                    if pd_value is not None:
-                        # Map PD to a 300-850 score for display
-                        # Lower PD = higher score
-                        score_req.score_value = int(
-                            850 - (pd_value * 550)
-                        )
+                    # pd_value = credit_risk.get("probability_of_default")
+                    # if pd_value is not None:
+                    #     # Map PD to a 300-850 score for display
+                    #     # Lower PD = higher score
+                    #     score_req.score_value = int(
+                    #         850 - (pd_value * 550)
+                    #     )
                     score_req.risk_category = credit_risk.get("risk_tier")
                     score_req.model_version = credit_risk.get("model_version")
+                
+                score_req.score_value = message.get("scoring_metadata", {}).get("credit_score")
 
                 score_req.confidence = (
                     credit_risk.get("pd_confidence") if credit_risk else None
@@ -140,10 +145,58 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                     f"[scoring-complete] ScoreRequest not found for {request_id}"
                 )
 
+            # ── Inline DecisionMetric for real-time dashboard data ────────
+            try:
+                from app.models.decision_metric import DecisionMetric
+
+                credit_risk_data = message.get("credit_risk") or {}
+                fraud_data = message.get("fraud_detection") or {}
+                loan_data = message.get("loan_amount") or {}
+                meta = message.get("scoring_metadata") or {}
+                shap = credit_risk_data.get("shap_contributions")
+
+                decision_metric = DecisionMetric(
+                    scoring_result_id=scoring_result.id,
+                    decision=decision_value,
+                    credit_score=meta.get("credit_score"),
+                    score_grade=meta.get("score_grade"),
+                    risk_tier=credit_risk_data.get("risk_tier"),
+                    fraud_flag=fraud_data.get("fraud_risk_flag"),
+                    loan_tier=loan_data.get("recommended_loan_tier"),
+                    probability_of_default=credit_risk_data.get(
+                        "probability_of_default"
+                    ),
+                    data_quality_score=meta.get("data_quality_score"),
+                    applicant_age=meta.get("applicant_age_at_application"),
+                    has_explainability=bool(shap and len(shap) > 0),
+                    timestamp=scoring_ts or utcnow(),
+                )
+                db.add(decision_metric)
+            except Exception as dm_err:
+                logger.warning(
+                    f"[scoring-complete] Failed to create DecisionMetric: {dm_err}"
+                )
+
     logger.info(
         f"[scoring-complete] Saved ScoringResult for {request_id} "
         f"(decision={decision_value})"
     )
+
+    # ── Inline metrics: drift + alert evaluation ──────────────────────────
+    # Runs after the main transaction so failures never affect scoring persistence.
+    try:
+        from app.db import async_session_factory as _sf
+        from app.jobs.drift_calculator import compute_feature_drift, compute_score_psi
+        from app.jobs.alert_evaluator import evaluate_risk_alerts, evaluate_model_alerts
+
+        async with _sf() as metrics_db:
+            async with metrics_db.begin():
+                await compute_score_psi(metrics_db)
+                await compute_feature_drift(metrics_db)
+                await evaluate_risk_alerts(metrics_db)
+                await evaluate_model_alerts(metrics_db)
+    except Exception as _me:
+        logger.warning("[scoring-complete] Inline metrics evaluation failed: %s", _me)
 
 
 async def _deliver_webhook(

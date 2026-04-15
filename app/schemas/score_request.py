@@ -277,15 +277,23 @@ class IncomeVerificationResult(BaseModel):
 
 
 class ScoringMetadata(BaseModel):
-    """Metadata passed through from DE via AI pipeline."""
+    """Metadata passed through from DE via AI pipeline.
+
+    ``extra = "allow"`` is critical: hard-stop declines store additional
+    keys (``hard_stop``, ``decline_reasons``, ``triggered_rules``) that
+    must survive Pydantic parsing so the model_validator on
+    ScoringResultResponse can extract them.
+    """
+
+    model_config = {"extra": "allow"}
 
     credit_score: int | None = None
     score_grade: str | None = None  # A-F
     data_quality_score: float | None = None
     bureau_hit_status: str | None = None  # HIT / NO_RECORD
     product_source: str | None = None  # "45+49" / "45" / "49"
-    applicant_age_at_application: int | None = None
-    credit_age_months_at_application: int | None = None
+    applicant_age_at_application: str | None = None
+    credit_age_months_at_application: str | None = None
 
 
 class ScoringResultResponse(BaseModel):
@@ -320,7 +328,18 @@ class ScoringResultResponse(BaseModel):
         always surfaced as first-class response fields.
         """
         meta = self.scoring_metadata
-        if isinstance(meta, dict) and meta.get("hard_stop"):
+        # Handle both dict and ScoringMetadata (which uses extra="allow")
+        if meta is None:
+            return self
+
+        if isinstance(meta, ScoringMetadata):
+            is_hard_stop = getattr(meta, "hard_stop", False)
+            if is_hard_stop:
+                if not self.decline_reasons:
+                    self.decline_reasons = getattr(meta, "decline_reasons", None)
+                if not self.triggered_rules:
+                    self.triggered_rules = getattr(meta, "triggered_rules", None)
+        elif isinstance(meta, dict) and meta.get("hard_stop"):
             if not self.decline_reasons:
                 self.decline_reasons = meta.get("decline_reasons")
             if not self.triggered_rules:

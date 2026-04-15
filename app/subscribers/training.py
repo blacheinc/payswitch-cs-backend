@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.db import async_session_factory
 from app.db.base import utcnow
 from app.models.data_source import TrainingUpload, UploadStatus
+from app.models.model_metric import ModelMetric
 from app.models.model_version import ModelStatus, ModelVersion
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,17 @@ async def handle_model_training_completed(message: dict[str, Any]) -> None:
                     model_version.status = ModelStatus.TRAINING
 
                 created_versions.append(model_version_str)
+
+                # Write training history record immediately (feeds model-ops retraining table)
+                if model_status_str.lower() in ("success", "complete"):
+                    db.add(ModelMetric(
+                        model_type=model_type,
+                        model_version=model_version_str,
+                        training_id=training_id,
+                        metric_type="training",
+                        metrics=model_metrics,
+                        timestamp=utcnow(),
+                    ))
 
             # Update TrainingUpload
             result = await db.execute(

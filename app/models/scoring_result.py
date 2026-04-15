@@ -17,6 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
+    from app.models.bulk_job import BulkScoringJob
     from app.models.score_request import ScoreRequest
 
 
@@ -42,6 +43,10 @@ class ScoringResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     score_request_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("score_requests.id"), index=True
+    )
+    # Set when this result was ingested from a batch job's results.jsonl
+    bulk_job_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("bulk_scoring_jobs.id"), index=True
     )
 
     # Timestamps
@@ -75,6 +80,9 @@ class ScoringResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Relationships
     score_request: Mapped["ScoreRequest | None"] = relationship(
         back_populates="scoring_result", foreign_keys=[score_request_id]
+    )
+    bulk_job: Mapped["BulkScoringJob | None"] = relationship(
+        foreign_keys=[bulk_job_id]
     )
 
     def __repr__(self) -> str:
