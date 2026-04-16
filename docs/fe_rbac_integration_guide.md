@@ -317,40 +317,118 @@ Content-Type: application/json
 
 ## Frontend Permission Checks
 
-The server is the source of truth — never rely solely on client-side checks for
-security. However, you should fetch the current user's resolved permissions after login
-and store them in your auth state to drive conditional rendering.
+The server is the **source of truth** — never rely solely on client-side checks for
+security. However, you must fetch the current user's **effective** permissions after
+login and store them in your auth state to drive conditional rendering.
 
-### Fetch resolved permissions after login
+> **`GET /v1/permissions` is NOT what you want here.** That endpoint returns the
+> permission *catalog* — every permission that *could* be assigned to roles in the
+> caller's scope. It says nothing about what the signed-in user actually has.
+> Use the endpoints below instead.
 
-Call `GET /v1/permissions` immediately after a successful login and store the result:
+---
+
+### Option 1 — Read from `GET /auth/me` (recommended, one call)
+
+`GET /auth/me` now includes a `permissions` field in its response. Since you already
+call this after login to get the user's profile, you get their effective permissions
+for free in the same request — no extra round-trip needed.
+
+```
+GET /auth/me
+Authorization: Bearer <jwt>
+```
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "jane@acme.com",
+  "name": "Jane Doe",
+  "user_type": "org_user",
+  "role": "credit_officer",
+  "status": "active",
+  "totp_enabled": false,
+  "organization_id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
+  "last_login_at": "2026-04-17T08:00:00Z",
+  "created_at": "2026-01-10T09:00:00Z",
+  "permissions": [
+    "bureau.lookup",
+    "score_requests.create",
+    "score_requests.list",
+    "score_requests.override",
+    "score_requests.read"
+  ]
+}
+```
+
+A SUPER_ADMIN admin user will receive `["*"]` — a single wildcard that means
+*all permissions granted, skip individual checks*.
+
+---
+
+### Option 2 — Standalone permissions endpoint
+
+Use this when you need to **refresh permissions without re-fetching the full profile**
+(e.g. after an admin changes the user's role mid-session).
+
+Also the only option for **API key callers** — they have no profile, but they do have
+a role and thus effective permissions.
+
+```
+GET /auth/me/permissions
+Authorization: Bearer <jwt-or-api-key>
+```
+
+```json
+{
+  "user_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "user_type": "org_user",
+  "is_super_admin": false,
+  "permissions": [
+    "bureau.lookup",
+    "score_requests.create",
+    "score_requests.list",
+    "score_requests.override",
+    "score_requests.read"
+  ]
+}
+```
+
+---
+
+### Storing and using permissions
 
 ```typescript
 // auth-store.ts
 interface AuthState {
   token: string
-  userType: 'admin' | 'org_user'
+  userId: string
+  userType: 'admin' | 'org_user' | 'api_key'
+  isSuperAdmin: boolean
   permissions: Set<string>
 }
 
-async function loadPermissions(token: string): Promise<Set<string>> {
-  const res = await fetch('/v1/permissions', {
-    headers: { Authorization: `Bearer ${token}` },
+// Called once after login using the /auth/me response
+function hydrateFromProfile(profile: UserProfileResponse): void {
+  authStore.isSuperAdmin = profile.permissions.includes('*')
+  authStore.permissions  = new Set(profile.permissions)
+}
+
+// Called to refresh mid-session (e.g. role was changed)
+async function refreshPermissions(): Promise<void> {
+  const res  = await fetch('/auth/me/permissions', {
+    headers: { Authorization: `Bearer ${authStore.token}` },
   })
-  if (!res.ok) return new Set()
   const data = await res.json()
-  return new Set((data.items as Array<{ code: string }>).map(p => p.code))
+  authStore.isSuperAdmin = data.is_super_admin
+  authStore.permissions  = new Set(data.permissions)
 }
 
 // Helper used everywhere in the UI
 function can(permission: string): boolean {
-  return authStore.permissions.has(permission)
+  return authStore.isSuperAdmin || authStore.permissions.has(permission)
 }
 ```
-
-> The wildcard `"*"` is never surfaced in the `/v1/permissions` response — the server
-> returns the explicit list of codes the user has. Simply check whether the code you
-> care about is present in that list.
 
 ### Gating UI elements
 
