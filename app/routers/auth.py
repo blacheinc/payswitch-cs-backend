@@ -26,7 +26,7 @@ from app.core.security import (
 )
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import get_current_admin, get_current_org_user, get_current_user
+from app.dependencies import AuthContext, get_auth_context, get_current_admin, get_current_org_user, get_current_user
 from app.models.user import AdminUser, AdminUserStatus, OrgUser, OrgUserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -38,6 +38,7 @@ from app.schemas.auth import (
     Remove2FARequest,
     Setup2FAResponse,
     TokenResponse,
+    UserPermissionsResponse,
     UserProfileResponse,
     Verify2FARequest,
     Verify2FAResponse,
@@ -53,9 +54,18 @@ settings = get_settings()
 @router.get("/me", response_model=UserProfileResponse)
 async def get_me(
     current_user: Annotated[AdminUser | OrgUser, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UserProfileResponse:
-    """Get the currently authenticated user's profile."""
+    """Get the currently authenticated user's profile, including their resolved permissions."""
+    from app.services.permissions import load_user_permissions
+
     if isinstance(current_user, AdminUser):
+        ctx = AuthContext(
+            user_id=current_user.id,
+            user_email=current_user.email,
+            user_type="admin",
+        )
+        perms = sorted(await load_user_permissions(db, ctx))
         return UserProfileResponse(
             id=str(current_user.id),
             email=current_user.email,
@@ -74,8 +84,16 @@ async def get_me(
                 if current_user.created_at
                 else None
             ),
+            permissions=perms,
         )
 
+    ctx = AuthContext(
+        user_id=current_user.id,
+        user_email=current_user.email,
+        user_type="org_user",
+        organization_id=current_user.organization_id,
+    )
+    perms = sorted(await load_user_permissions(db, ctx))
     return UserProfileResponse(
         id=str(current_user.id),
         email=current_user.email,
@@ -95,6 +113,36 @@ async def get_me(
             if current_user.created_at
             else None
         ),
+        permissions=perms,
+    )
+
+
+@router.get("/me/permissions", response_model=UserPermissionsResponse)
+async def get_my_permissions(
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UserPermissionsResponse:
+    """Return the resolved permission set for the currently authenticated principal.
+
+    Works for JWT-authenticated users (admin and org users) as well as API keys.
+    Call this once after login and cache the result in your auth store — refresh
+    whenever the user's role changes.
+
+    A ``permissions`` list containing ``["*"]`` means the caller holds the
+    SUPER_ADMIN role and passes every permission check on the platform.
+    """
+    from app.services.permissions import load_user_permissions
+
+    perms = await load_user_permissions(db, auth)
+    is_super = "*" in perms
+    user_id = str(auth.user_id) if auth.user_id else (
+        str(auth.api_key.id) if auth.api_key else "unknown"
+    )
+    return UserPermissionsResponse(
+        user_id=user_id,
+        user_type=auth.user_type,
+        permissions=sorted(perms),
+        is_super_admin=is_super,
     )
 
 

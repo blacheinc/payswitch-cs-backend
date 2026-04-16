@@ -85,3 +85,16 @@ class UserProfileResponse(BaseModel):
     organization_id: str | None = None
     last_login_at: str | None = None
     created_at: str | None = None
+    # Resolved RBAC permission codes for this user.
+    # ["*"] means super-admin — skip individual checks.
+    # Empty list means no role has been assigned yet.
+    permissions: list[str] = []
+
+
+class UserPermissionsResponse(BaseModel):
+    """Returned by GET /auth/me/permissions."""
+    user_id: str
+    user_type: str  # "admin", "org_user", or "api_key"
+    # Resolved permission codes.  ["*"] = SUPER_ADMIN wildcard.
+    permissions: list[str]
+    is_super_admin: bool
