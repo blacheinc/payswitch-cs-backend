@@ -22,6 +22,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.app_name} ({settings.app_env})")
 
+    # Seed permissions and system roles (idempotent)
+    from app.db import async_session_factory
+    from app.services.permission_seeder import seed_permissions_and_roles
+
+    async with async_session_factory() as db:
+        await seed_permissions_and_roles(db)
+
     # Initialize Redis connection
     from app.storage.cache import get_redis_cache
 
@@ -136,11 +143,13 @@ def create_app() -> FastAPI:
     from app.routers.rules import router as rules_router
     from app.routers.monitoring import monitoring_router
     from app.routers.batch_scoring import router as batch_scoring_router
+    from app.routers.permissions import router as permissions_router
 
     app.include_router(models_router)
     app.include_router(rules_router)
     app.include_router(monitoring_router)
     app.include_router(batch_scoring_router)
+    app.include_router(permissions_router)
 
     app.include_router(profile_router)
     app.include_router(users_router)

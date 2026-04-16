@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.thresholds import ALERT_THRESHOLDS
 from app.db import get_db
-from app.dependencies import get_current_admin
-from app.models.user import AdminUser
+from app.dependencies import AuthContext, require_permission
+
 from app.services.metrics_aggregator import get_model_ops_metrics
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.get("/model-ops")
 async def model_ops_dashboard(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("monitoring.model_ops"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     model_type: str | None = Query(
         None,

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.dependencies import AuthContext, check_rate_limit
+from app.dependencies import AuthContext, require_permission
 from app.schemas.bureau_schemas import (
     NO_RECORD_DEFAULT_FEATURES,
     BureauCreditAccount,
@@ -47,7 +47,7 @@ router = APIRouter(prefix="/v1", tags=["Bureau Lookup"])
 )
 async def bureau_lookup(
     body: BureauLookupRequest,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("bureau.lookup"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> BureauLookupResponse:
     """Call XDS Credit Bureau and return structured bureau data."""

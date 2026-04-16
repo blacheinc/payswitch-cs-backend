@@ -19,10 +19,10 @@ from app.core.security import (
     generate_email_verification_token,
 )
 from app.db import get_db
-from app.dependencies import get_current_admin
+from app.dependencies import AuthContext, require_permission
 from app.models.api_key import ApiKey, ApiKeyEnvironment
 from app.models.organization import IndustryType, OrgStatus, Organization
-from app.models.user import AdminUser, OrgRoleLabel, OrgUser, OrgUserStatus
+from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 from app.schemas.common import SuccessResponse
 from app.schemas.organization import (
     CreateOrganizationRequest,
@@ -45,7 +45,7 @@ router = APIRouter(prefix="/admin/organizations", tags=["Admin – Organizations
 )
 async def create_organization(
     body: CreateOrganizationRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
     """Create a new organization (admin only)."""
@@ -87,7 +87,7 @@ async def create_organization(
 
 @router.get("", response_model=PaginatedResponse[OrganizationResponse])
 async def list_organizations(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -130,7 +130,7 @@ async def list_organizations(
 @router.get("/{org_id}", response_model=OrganizationResponse)
 async def get_organization(
     org_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
     """Get organization details."""
@@ -145,7 +145,7 @@ async def get_organization(
 async def update_organization(
     org_id: UUID,
     body: UpdateOrganizationRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.update"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
     """Update organization details."""
@@ -181,7 +181,7 @@ async def update_organization(
 @router.post("/{org_id}/provision", response_model=ProvisionResponse)
 async def provision_organization(
     org_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.provision"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     body: ProvisionOrganizationRequest | None = None,
 ) -> ProvisionResponse:
@@ -253,7 +253,7 @@ async def provision_organization(
 async def suspend_organization(
     org_id: UUID,
     body: SuspendRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.suspend"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Suspend an organization (with reason)."""
@@ -274,7 +274,7 @@ async def suspend_organization(
 @router.post("/{org_id}/activate", response_model=SuccessResponse)
 async def activate_organization(
     org_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.suspend"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Re-activate a suspended organization."""
@@ -298,7 +298,7 @@ async def activate_organization(
 @router.get("/{org_id}/users", response_model=PaginatedResponse[OrgUserResponse])
 async def list_org_users(
     org_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -340,7 +340,7 @@ async def update_org_user(
     org_id: UUID,
     user_id: UUID,
     body: UpdateUserRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.organizations.update"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrgUserResponse:
     """Update an organization user's details (admin only)."""

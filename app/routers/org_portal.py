@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.pagination import PaginatedResponse
 from app.core.security import (
     generate_api_key,
@@ -19,9 +19,10 @@ from app.core.security import (
     hash_password,
 )
 from app.db import get_db
-from app.dependencies import get_current_org_user
+from app.dependencies import AuthContext, require_permission
 from app.models.api_key import ApiKey, ApiKeyEnvironment, ApiKeyStatus
 from app.models.organization import Organization
+from app.models.permission import OrgUserRole, Role
 from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 from app.models.webhook import WebhookConfig
 from app.schemas.api_key import (
@@ -51,11 +52,11 @@ profile_router = APIRouter(prefix="/org/profile", tags=["Org Portal – Profile"
 
 @profile_router.get("", response_model=OrganizationResponse)
 async def get_org_profile(
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("org.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
     result = await db.execute(
-        select(Organization).where(Organization.id == user.organization_id)
+        select(Organization).where(Organization.id == auth.organization_id)
     )
     org = result.scalar_one()
     return OrganizationResponse.model_validate(org)
@@ -64,11 +65,11 @@ async def get_org_profile(
 @profile_router.patch("", response_model=OrganizationResponse)
 async def update_org_profile(
     body: UpdateOrganizationRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("org.update"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
     result = await db.execute(
-        select(Organization).where(Organization.id == user.organization_id)
+        select(Organization).where(Organization.id == auth.organization_id)
     )
     org = result.scalar_one()
     for field, value in body.model_dump(exclude_unset=True).items():
@@ -83,15 +84,49 @@ async def update_org_profile(
 users_router = APIRouter(prefix="/org/users", tags=["Org Portal – Users"])
 
 
+async def _resolve_role_for_invite(
+    db: AsyncSession, role_id: UUID | None, org_id
+) -> Role:
+    """Return the Role to assign when inviting a user.
+
+    If role_id is provided it must exist, be org-scoped, and belong to the
+    caller's org (or be the system ADMIN role).  When omitted the system ADMIN
+    role is used.
+    """
+    if role_id is not None:
+        role = (
+            await db.execute(select(Role).where(Role.id == role_id))
+        ).scalar_one_or_none()
+        if not role:
+            raise NotFoundError("Role", str(role_id))
+        if role.scope != "org":
+            raise ValidationError("Only org-scoped roles can be assigned to org users")
+        if not role.is_system and str(role.organization_id) != str(org_id):
+            raise NotFoundError("Role", str(role_id))
+        return role
+
+    # Default to system ADMIN role
+    admin_role = (
+        await db.execute(
+            select(Role).where(Role.name == "ADMIN", Role.is_system == True)  # noqa: E712
+        )
+    ).scalar_one_or_none()
+    if not admin_role:
+        raise ValidationError("System ADMIN role not found — ensure seeder has run")
+    return admin_role
+
+
 @users_router.post(
     "", response_model=OrgUserResponse, status_code=status.HTTP_201_CREATED
 )
 async def invite_user(
     body: InviteUserRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.invite"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrgUserResponse:
     """Invite a new user to the organization."""
+    role = await _resolve_role_for_invite(db, body.role_id, auth.organization_id)
+
     existing = await db.execute(select(OrgUser).where(OrgUser.email == body.email))
     existing_user = existing.scalar_one_or_none()
 
@@ -101,7 +136,7 @@ async def invite_user(
 
         # Re-activate previously removed user
         temp_password = generate_temp_password()
-        existing_user.organization_id = user.organization_id
+        existing_user.organization_id = auth.organization_id
         existing_user.name = body.name
         existing_user.password_hash = hash_password(temp_password)
         existing_user.role_label = OrgRoleLabel(body.role_label)
@@ -110,6 +145,24 @@ async def invite_user(
         existing_user.totp_secret = None
         existing_user.totp_enabled = False
         await db.flush()
+
+        # Assign RBAC role (replace existing if any)
+        existing_rbac = (
+            await db.execute(
+                select(OrgUserRole).where(OrgUserRole.org_user_id == existing_user.id)
+            )
+        ).scalar_one_or_none()
+        if existing_rbac:
+            existing_rbac.role_id = role.id
+            existing_rbac.assigned_by = auth.user_id
+        else:
+            db.add(OrgUserRole(
+                org_user_id=existing_user.id,
+                role_id=role.id,
+                assigned_by=auth.user_id,
+            ))
+        await db.flush()
+
         email_service.send_invite_email(
             to_email=existing_user.email,
             temp_password=temp_password,
@@ -119,7 +172,7 @@ async def invite_user(
 
     temp_password = generate_temp_password()
     new_user = OrgUser(
-        organization_id=user.organization_id,
+        organization_id=auth.organization_id,
         email=body.email,
         name=body.name,
         password_hash=hash_password(temp_password),
@@ -129,6 +182,14 @@ async def invite_user(
     )
     db.add(new_user)
     await db.flush()
+
+    db.add(OrgUserRole(
+        org_user_id=new_user.id,
+        role_id=role.id,
+        assigned_by=auth.user_id,
+    ))
+    await db.flush()
+
     email_service.send_invite_email(
         to_email=new_user.email,
         temp_password=temp_password,
@@ -139,7 +200,7 @@ async def invite_user(
 
 @users_router.get("", response_model=OrgUserListResponse)
 async def list_users(
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.list"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -148,7 +209,7 @@ async def list_users(
     total_members = (
         await db.execute(
             select(func.count(OrgUser.id)).where(
-                OrgUser.organization_id == user.organization_id,
+                OrgUser.organization_id == auth.organization_id,
                 OrgUser.status != OrgUserStatus.REMOVED,
             )
         )
@@ -158,7 +219,7 @@ async def list_users(
     pending_invites = (
         await db.execute(
             select(func.count(OrgUser.id)).where(
-                OrgUser.organization_id == user.organization_id,
+                OrgUser.organization_id == auth.organization_id,
                 OrgUser.status == OrgUserStatus.PENDING,
             )
         )
@@ -168,7 +229,7 @@ async def list_users(
     admin_users = (
         await db.execute(
             select(func.count(OrgUser.id)).where(
-                OrgUser.organization_id == user.organization_id,
+                OrgUser.organization_id == auth.organization_id,
                 OrgUser.status != OrgUserStatus.REMOVED,
                 OrgUser.role_label == OrgRoleLabel.ADMIN,
             )
@@ -178,7 +239,7 @@ async def list_users(
     result = await db.execute(
         select(OrgUser)
         .where(
-            OrgUser.organization_id == user.organization_id,
+            OrgUser.organization_id == auth.organization_id,
             OrgUser.status != OrgUserStatus.REMOVED,
         )
         .order_by(OrgUser.created_at.desc())
@@ -202,14 +263,14 @@ async def list_users(
 @users_router.delete("/{user_id}", response_model=SuccessResponse)
 async def remove_user(
     user_id: UUID,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.delete"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Remove a user from the organization."""
     result = await db.execute(
         select(OrgUser).where(
             OrgUser.id == user_id,
-            OrgUser.organization_id == user.organization_id,
+            OrgUser.organization_id == auth.organization_id,
         )
     )
     target = result.scalar_one_or_none()
@@ -224,14 +285,14 @@ async def remove_user(
 async def update_user(
     user_id: UUID,
     body: UpdateUserRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.update"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrgUserResponse:
-    """Update an organization user's name or role."""
+    """Update an organization user's name, role label, or RBAC role."""
     result = await db.execute(
         select(OrgUser).where(
             OrgUser.id == user_id,
-            OrgUser.organization_id == user.organization_id,
+            OrgUser.organization_id == auth.organization_id,
         )
     )
     target = result.scalar_one_or_none()
@@ -239,11 +300,32 @@ async def update_user(
         raise NotFoundError("User", str(user_id))
 
     update_data = body.model_dump(exclude_unset=True)
+
+    # Handle role_id update separately (RBAC assignment)
+    new_role_id = update_data.pop("role_id", None)
+
     if "role_label" in update_data and update_data["role_label"] is not None:
         update_data["role_label"] = OrgRoleLabel(update_data["role_label"])
 
     for field, value in update_data.items():
         setattr(target, field, value)
+
+    if new_role_id is not None:
+        role = await _resolve_role_for_invite(db, new_role_id, auth.organization_id)
+        existing_rbac = (
+            await db.execute(
+                select(OrgUserRole).where(OrgUserRole.org_user_id == target.id)
+            )
+        ).scalar_one_or_none()
+        if existing_rbac:
+            existing_rbac.role_id = role.id
+            existing_rbac.assigned_by = auth.user_id
+        else:
+            db.add(OrgUserRole(
+                org_user_id=target.id,
+                role_id=role.id,
+                assigned_by=auth.user_id,
+            ))
 
     await db.flush()
     await db.refresh(target)
@@ -253,20 +335,20 @@ async def update_user(
 @users_router.post("/{user_id}/suspend", response_model=SuccessResponse)
 async def suspend_user(
     user_id: UUID,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.suspend"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Suspend an organization user."""
     result = await db.execute(
         select(OrgUser).where(
             OrgUser.id == user_id,
-            OrgUser.organization_id == user.organization_id,
+            OrgUser.organization_id == auth.organization_id,
         )
     )
     target = result.scalar_one_or_none()
     if not target:
         raise NotFoundError("User", str(user_id))
-    if target.id == user.id:
+    if target.id == auth.user_id:
         raise ConflictError("Cannot suspend yourself")
     if target.status != OrgUserStatus.ACTIVE:
         raise ConflictError(
@@ -281,14 +363,14 @@ async def suspend_user(
 @users_router.post("/{user_id}/activate", response_model=SuccessResponse)
 async def activate_user(
     user_id: UUID,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("users.suspend"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Re-activate a suspended organization user."""
     result = await db.execute(
         select(OrgUser).where(
             OrgUser.id == user_id,
-            OrgUser.organization_id == user.organization_id,
+            OrgUser.organization_id == auth.organization_id,
         )
     )
     target = result.scalar_one_or_none()
@@ -312,18 +394,22 @@ api_keys_router = APIRouter(prefix="/org/api-keys", tags=["Org Portal – API Ke
 )
 async def create_api_key(
     body: CreateApiKeyRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("api_keys.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ApiKeyCreatedResponse:
     """Generate a new API key."""
+    # Resolve the role for this API key
+    role = await _resolve_role_for_invite(db, body.role_id, auth.organization_id)
+
     full_key, prefix, key_hash = generate_api_key(body.environment)
     api_key = ApiKey(
-        organization_id=user.organization_id,
+        organization_id=auth.organization_id,
         key_hash=key_hash,
         key_prefix=prefix,
         name=body.name,
         environment=ApiKeyEnvironment(body.environment),
-        created_by_user_id=user.id,
+        created_by_user_id=auth.user_id,
+        role_id=role.id,
     )
     db.add(api_key)
     await db.flush()
@@ -338,12 +424,12 @@ async def create_api_key(
 
 @api_keys_router.get("", response_model=list[ApiKeyResponse])
 async def list_api_keys(
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("api_keys.list"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[ApiKeyResponse]:
     result = await db.execute(
         select(ApiKey).where(
-            ApiKey.organization_id == user.organization_id,
+            ApiKey.organization_id == auth.organization_id,
             ApiKey.status == ApiKeyStatus.ACTIVE,
         )
     )
@@ -354,13 +440,13 @@ async def list_api_keys(
 @api_keys_router.delete("/{key_id}", response_model=SuccessResponse)
 async def revoke_api_key(
     key_id: UUID,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("api_keys.revoke"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     result = await db.execute(
         select(ApiKey).where(
             ApiKey.id == key_id,
-            ApiKey.organization_id == user.organization_id,
+            ApiKey.organization_id == auth.organization_id,
         )
     )
     key = result.scalar_one_or_none()
@@ -404,11 +490,11 @@ async def list_webhook_events() -> list[dict]:
 )
 async def create_webhook(
     body: CreateWebhookRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("webhooks.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> WebhookResponse:
     webhook = WebhookConfig(
-        organization_id=user.organization_id,
+        organization_id=auth.organization_id,
         url=body.url,
         events=body.events,
         description=body.description,
@@ -420,12 +506,12 @@ async def create_webhook(
 
 @webhooks_router.get("", response_model=list[WebhookResponse])
 async def list_webhooks(
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("webhooks.list"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[WebhookResponse]:
     result = await db.execute(
         select(WebhookConfig).where(
-            WebhookConfig.organization_id == user.organization_id
+            WebhookConfig.organization_id == auth.organization_id
         )
     )
     configs = result.scalars().all()
@@ -436,13 +522,13 @@ async def list_webhooks(
 async def update_webhook(
     webhook_id: UUID,
     body: UpdateWebhookRequest,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("webhooks.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> WebhookResponse:
     result = await db.execute(
         select(WebhookConfig).where(
             WebhookConfig.id == webhook_id,
-            WebhookConfig.organization_id == user.organization_id,
+            WebhookConfig.organization_id == auth.organization_id,
         )
     )
     config = result.scalar_one_or_none()
@@ -457,13 +543,13 @@ async def update_webhook(
 @webhooks_router.delete("/{webhook_id}", response_model=SuccessResponse)
 async def delete_webhook(
     webhook_id: UUID,
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("webhooks.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     result = await db.execute(
         select(WebhookConfig).where(
             WebhookConfig.id == webhook_id,
-            WebhookConfig.organization_id == user.organization_id,
+            WebhookConfig.organization_id == auth.organization_id,
         )
     )
     config = result.scalar_one_or_none()
@@ -480,7 +566,7 @@ api_logs_router = APIRouter(prefix="/org/api-logs", tags=["Org Portal – API Lo
 
 @api_logs_router.get("", response_model=PaginatedResponse)
 async def list_api_logs(
-    user: Annotated[OrgUser, Depends(get_current_org_user)],
+    auth: Annotated[AuthContext, Depends(require_permission("api_logs.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=20, ge=1, le=100),
@@ -505,11 +591,11 @@ async def list_api_logs(
 
     from app.models.api_log import ApiLog
 
-    query = select(ApiLog).where(ApiLog.organization_id == user.organization_id)
+    query = select(ApiLog).where(ApiLog.organization_id == auth.organization_id)
     count_query = (
         select(func.count())
         .select_from(ApiLog)
-        .where(ApiLog.organization_id == user.organization_id)
+        .where(ApiLog.organization_id == auth.organization_id)
     )
 
     # Filters

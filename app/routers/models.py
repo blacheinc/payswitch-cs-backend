@@ -12,8 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from app.dependencies import get_current_admin
-from app.models.user import AdminUser
+from app.dependencies import AuthContext, require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +21,7 @@ router = APIRouter(prefix="/v1/models", tags=["Models"])
 
 @router.get("/current")
 async def get_current_champion_model(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("models.read"))],
 ) -> JSONResponse:
     """Return active champion model metadata.
 

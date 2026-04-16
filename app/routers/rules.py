@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
 
-from app.dependencies import AuthContext, get_auth_context
+from app.dependencies import AuthContext, require_permission
 from app.schemas.monitoring import RuleEvaluateRequest
 from app.services.orchestrator_proxy import forward_rule_evaluation
 
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/v1/rules", tags=["Rules"])
 @router.post("/evaluate")
 async def evaluate_rules(
     body: RuleEvaluateRequest,
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    _auth: Annotated[AuthContext, Depends(require_permission("rules.evaluate"))],
 ) -> JSONResponse:
     """Sandbox rule evaluation — proxy to orchestrator.
 

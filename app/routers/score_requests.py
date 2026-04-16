@@ -24,7 +24,7 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import PaginatedResponse
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import AuthContext, check_rate_limit
+from app.dependencies import AuthContext, require_permission
 from app.models.score_request import (
     DecisionType,
     LoanPerformance,
@@ -291,7 +291,7 @@ def _build_xds_payload(
 )
 async def create_score_request(
     body: CreateScoreRequestInput,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> ScoreRequestResponse | HardStopDeclineResponse:
@@ -764,7 +764,7 @@ async def create_score_request(
 @router.get("/{request_id}", response_model=ScoreRequestResponse)
 async def get_score_request(
     request_id: str,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScoreRequestResponse:
     """Get the result of a score request by tracking ID."""
@@ -797,7 +797,7 @@ async def get_score_request(
 @router.get("/{request_id}/scoring-result", response_model=ScoringResultResponse)
 async def get_scoring_result(
     request_id: str,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScoringResultResponse:
     """Get the full 4-model scoring result for a score request.
@@ -864,7 +864,7 @@ async def get_scoring_result(
 async def override_decision(
     request_id: str,
     body: OverrideDecisionRequest,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.override"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OverrideDecisionResponse:
     """Manually override a REFER decision.
@@ -946,7 +946,7 @@ async def override_decision(
 
 @router.get("", response_model=PaginatedResponse[ScoreRequestSummary])
 async def list_score_requests(
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.list"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -1006,7 +1006,7 @@ async def list_score_requests(
 async def record_outcome(
     request_id: str,
     body: RecordOutcomeRequest,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.report_outcome"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OutcomeResponse:
     """Record the lending decision for a score request (for model feedback)."""
@@ -1040,7 +1040,7 @@ async def record_outcome(
 async def record_performance(
     request_id: str,
     body: RecordPerformanceRequest,
-    auth: Annotated[AuthContext, Depends(check_rate_limit)],
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.report_performance"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> PerformanceResponse:
     """Report loan performance data (for model training feedback loop)."""

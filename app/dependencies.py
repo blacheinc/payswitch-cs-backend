@@ -51,6 +51,8 @@ class AuthContext:
         self.organization = organization
         self.api_key = api_key
         self.role = role
+        # Populated by require_permission() on first access — None means not yet loaded.
+        self.permissions: set[str] | None = None
 
 
 # ── Admin Authentication ──────────────────────────────────────────────────────
@@ -309,3 +311,62 @@ async def check_rate_limit(
     request.state.api_key_prefix = auth.api_key.key_prefix if auth.api_key else None
 
     return auth
+
+
+# ── Permission-gated dependency factory ──────────────────────────────────────
+
+
+def require_any_permission(*codes: str):
+    """Like require_permission but accepts if the caller has ANY of the given codes.
+
+    Useful for endpoints reachable by both admin and org users where the
+    permission code differs (e.g. "admin.roles.read" vs "roles.read").
+    """
+
+    async def _check(
+        auth: Annotated[AuthContext, Depends(check_rate_limit)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> AuthContext:
+        from app.core.exceptions import AuthorizationError
+        from app.services.permissions import load_user_permissions
+
+        permissions = await load_user_permissions(db, auth)
+        auth.permissions = permissions
+
+        if "*" not in permissions and not any(c in permissions for c in codes):
+            raise AuthorizationError(f"One of these permissions required: {', '.join(codes)}")
+
+        return auth
+
+    return _check
+
+
+def require_permission(code: str):
+    """Return a FastAPI dependency that enforces *code* permission.
+
+    Chains on top of check_rate_limit (which itself chains on get_auth_context),
+    so rate-limiting is always applied before the permission check.
+
+    Usage::
+
+        @router.post("/something")
+        async def handler(auth: Annotated[AuthContext, Depends(require_permission("score_requests.create"))]):
+            ...
+    """
+
+    async def _check(
+        auth: Annotated[AuthContext, Depends(check_rate_limit)],
+        db: Annotated[AsyncSession, Depends(get_db)],
+    ) -> AuthContext:
+        from app.core.exceptions import AuthorizationError
+        from app.services.permissions import load_user_permissions
+
+        permissions = await load_user_permissions(db, auth)
+        auth.permissions = permissions
+
+        if "*" not in permissions and code not in permissions:
+            raise AuthorizationError(f"Permission required: {code}")
+
+        return auth
+
+    return _check

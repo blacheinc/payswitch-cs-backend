@@ -16,7 +16,7 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.pagination import PaginatedResponse
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import get_current_admin
+from app.dependencies import AuthContext, require_permission
 from app.models.data_source import (
     ConfidenceLevel,
     DataSource,
@@ -27,7 +27,6 @@ from app.models.data_source import (
     TrainingUpload,
     UploadStatus,
 )
-from app.models.user import AdminUser
 from app.schemas.training_data import (
     ApproveUploadRequest,
     ApproveUploadResponse,
@@ -71,7 +70,7 @@ def _build_upload_response(upload: TrainingUpload) -> TrainingUploadResponse:
 async def upload_training_data(
     file: Annotated[UploadFile, File(description="Training data file")],
     source_id: Annotated[str, Form(description="Data source UUID")],
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TrainingUploadResponse:
     """Upload a bank data file for mapping and training.
@@ -187,7 +186,7 @@ async def upload_training_data(
 
 @router.get("", response_model=PaginatedResponse[TrainingUploadResponse])
 async def list_uploads(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -226,7 +225,7 @@ async def list_uploads(
 @router.get("/{upload_id}", response_model=TrainingUploadResponse)
 async def get_upload(
     upload_id: str,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TrainingUploadResponse:
     """Get upload details + quality report."""
@@ -245,7 +244,7 @@ async def get_upload(
 @router.get("/{upload_id}/status", response_model=UploadStatusResponse)
 async def get_upload_status(
     upload_id: str,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusResponse:
     """Lightweight status poll for frontend."""
@@ -271,7 +270,7 @@ async def get_upload_status(
 @router.get("/{upload_id}/mapping", response_model=MappingResultResponse)
 async def get_mapping(
     upload_id: str,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MappingResultResponse:
     """Get field mappings + sample data for admin review."""
@@ -335,7 +334,7 @@ async def get_mapping(
 async def update_mapping(
     upload_id: str,
     body: UpdateMappingsRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MappingResultResponse:
     """Admin corrects field mappings before approval."""
@@ -394,7 +393,7 @@ async def update_mapping(
 @router.post("/{upload_id}/approve", response_model=ApproveUploadResponse)
 async def approve_upload(
     upload_id: str,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.approve"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     body: ApproveUploadRequest | None = None,
 ) -> ApproveUploadResponse:
@@ -528,7 +527,7 @@ async def approve_upload(
 async def reject_upload(
     upload_id: str,
     body: RejectUploadRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.approve"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TrainingUploadResponse:
     """Reject a mapping with a reason."""
@@ -552,7 +551,7 @@ async def reject_upload(
 @router.post("/{upload_id}/retry", response_model=UploadStatusResponse)
 async def retry_upload(
     upload_id: str,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusResponse:
     """Re-trigger the Data Quality Agent for a failed upload."""

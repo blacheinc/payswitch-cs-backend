@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import AuthContext, get_auth_context
+from app.dependencies import AuthContext, require_permission
 from app.models.bulk_job import BulkJobStatus, BulkScoringJob, IngestionStatus
 from app.models.scoring_result import ScoringResult
 from app.schemas.batch_scoring import BatchScoreRequest
@@ -38,7 +38,7 @@ router = APIRouter(prefix="/v1/score/batch", tags=["Batch Scoring"])
 @router.post("")
 async def submit_batch_job(
     body: BatchScoreRequest,
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
     """Submit a batch scoring job.
@@ -109,7 +109,7 @@ async def submit_batch_job(
 
 @router.get("")
 async def list_batch_jobs(
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     status: str | None = Query(None, description="Filter by status"),
     page: int = Query(1, ge=1),
@@ -155,7 +155,7 @@ async def list_batch_jobs(
 @router.get("/{job_id}")
 async def get_batch_job_status(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
     """Return status and live progress for a batch job.
@@ -227,7 +227,7 @@ async def get_batch_job_status(
 @router.get("/{job_id}/results")
 async def get_batch_results(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     decision: str | None = Query(None, description="Filter by decision outcome"),
     risk_tier: str | None = Query(None, description="Filter by risk tier"),
@@ -316,7 +316,7 @@ async def get_batch_results(
 @router.post("/{job_id}/cancel")
 async def cancel_batch_job(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(get_auth_context)],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
     """Cancel a queued batch job.

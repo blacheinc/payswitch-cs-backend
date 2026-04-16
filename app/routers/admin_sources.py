@@ -12,14 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import PaginatedResponse
 from app.db import get_db
-from app.dependencies import get_current_admin
+from app.dependencies import AuthContext, require_permission
 from app.models.data_source import (
     DataSource,
     MappingTemplate,
     SourceType,
     TrainingUpload,
 )
-from app.models.user import AdminUser
 from app.schemas.training_data import (
     CreateDataSourceRequest,
     DataSourceDetailResponse,
@@ -34,7 +33,7 @@ router = APIRouter(prefix="/admin/sources", tags=["Admin – Data Sources"])
 @router.post("", response_model=DataSourceResponse, status_code=status.HTTP_201_CREATED)
 async def create_source(
     body: CreateDataSourceRequest,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DataSourceResponse:
     """Register a new data source (bank/institution)."""
@@ -60,7 +59,7 @@ async def create_source(
 
 @router.get("", response_model=PaginatedResponse[DataSourceResponse])
 async def list_sources(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=100),
@@ -105,7 +104,7 @@ async def list_sources(
 @router.get("/{source_id}", response_model=DataSourceDetailResponse)
 async def get_source(
     source_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DataSourceDetailResponse:
     """Get source details, including template availability."""
@@ -142,7 +141,7 @@ async def get_source(
 @router.get("/{source_id}/template", response_model=MappingTemplateResponse | None)
 async def get_template(
     source_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MappingTemplateResponse | None:
     """Get the active mapping template for a data source."""
@@ -164,7 +163,7 @@ async def get_template(
 )
 async def list_source_uploads(
     source_id: UUID,
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),

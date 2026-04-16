@@ -60,6 +60,11 @@ class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("org_users.id")
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Optional role — governs which permissions this key carries.
+    # NULL means the key was created before RBAC was introduced (treated as full ADMIN access).
+    role_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # Relationships
     organization: Mapped["Organization"] = relationship(back_populates="api_keys")

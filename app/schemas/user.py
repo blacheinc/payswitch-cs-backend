@@ -25,7 +25,11 @@ class InviteUserRequest(BaseModel):
     name: str = Field(max_length=200)
     role_label: RoleLabel = Field(
         default=RoleLabel.VIEWER,
-        description="User role: admin, credit_officer, developer, viewer",
+        description="User role label: admin, credit_officer, developer, viewer",
+    )
+    role_id: UUID | None = Field(
+        default=None,
+        description="RBAC role to assign. Defaults to the system ADMIN role when omitted.",
     )
     callback_url: str | None = None
 
@@ -34,7 +38,11 @@ class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     role_label: RoleLabel | None = Field(
         default=None,
-        description="User role: admin, credit_officer, developer, viewer",
+        description="User role label: admin, credit_officer, developer, viewer",
+    )
+    role_id: UUID | None = Field(
+        default=None,
+        description="Replace the user's RBAC role assignment",
     )
 
 

@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
-from app.dependencies import get_current_admin
-from app.models.user import AdminUser
+from app.dependencies import AuthContext, require_permission
+
 from app.services.metrics_aggregator import get_risk_metrics
 
 router = APIRouter()
@@ -17,7 +17,7 @@ router = APIRouter()
 
 @router.get("/risk")
 async def risk_dashboard(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
+    _auth: Annotated[AuthContext, Depends(require_permission("monitoring.risk"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     period: str = Query("7d", pattern="^(24h|7d|30d|90d)$"),
     segment: str | None = Query(None, pattern="^[A-F]$", description="Filter by score grade"),
