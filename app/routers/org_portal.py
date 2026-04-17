@@ -45,6 +45,17 @@ from app.schemas.webhook import (
 )
 from app.services.email import email_service
 
+
+def _coerce_role_label(value: str | None) -> OrgRoleLabel:
+    """Convert a free-form string to OrgRoleLabel, defaulting to VIEWER for unknowns."""
+    if value is None:
+        return OrgRoleLabel.VIEWER
+    try:
+        return OrgRoleLabel(value.lower())
+    except ValueError:
+        return OrgRoleLabel.VIEWER
+
+
 # ── Organization Profile ──────────────────────────────────────────────────────
 
 profile_router = APIRouter(prefix="/org/profile", tags=["Org Portal – Profile"])
@@ -139,7 +150,7 @@ async def invite_user(
         existing_user.organization_id = auth.organization_id
         existing_user.name = body.name
         existing_user.password_hash = hash_password(temp_password)
-        existing_user.role_label = OrgRoleLabel(body.role_label)
+        existing_user.role_label = _coerce_role_label(body.role_label)
         existing_user.status = OrgUserStatus.ACTIVE
         existing_user.email_verification_token = generate_email_verification_token()
         existing_user.totp_secret = None
@@ -176,7 +187,7 @@ async def invite_user(
         email=body.email,
         name=body.name,
         password_hash=hash_password(temp_password),
-        role_label=OrgRoleLabel(body.role_label),
+        role_label=_coerce_role_label(body.role_label),
         status=OrgUserStatus.ACTIVE,
         email_verification_token=generate_email_verification_token(),
     )
@@ -305,7 +316,7 @@ async def update_user(
     new_role_id = update_data.pop("role_id", None)
 
     if "role_label" in update_data and update_data["role_label"] is not None:
-        update_data["role_label"] = OrgRoleLabel(update_data["role_label"])
+        update_data["role_label"] = _coerce_role_label(update_data["role_label"])
 
     for field, value in update_data.items():
         setattr(target, field, value)

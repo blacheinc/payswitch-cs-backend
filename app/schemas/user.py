@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field
@@ -11,21 +10,15 @@ from pydantic import BaseModel, EmailStr, Field
 from app.schemas.common import BaseSchema
 
 
-class RoleLabel(str, Enum):
-    """Valid org user roles."""
-
-    ADMIN = "admin"
-    CREDIT_OFFICER = "credit_officer"
-    DEVELOPER = "developer"
-    VIEWER = "viewer"
-
-
 class InviteUserRequest(BaseModel):
     email: EmailStr
     name: str = Field(max_length=200)
-    role_label: RoleLabel = Field(
-        default=RoleLabel.VIEWER,
-        description="User role label: admin, credit_officer, developer, viewer",
+    # Display-only badge — no longer enum-validated since RBAC role_id
+    # is the authoritative permissions mechanism.  Any string is accepted;
+    # unknown values are silently coerced to "viewer" in the handler.
+    role_label: str | None = Field(
+        default=None,
+        description="Optional display label (e.g. 'credit_officer'). Defaults to 'viewer'.",
     )
     role_id: UUID | None = Field(
         default=None,
@@ -36,9 +29,9 @@ class InviteUserRequest(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     name: str | None = Field(default=None, max_length=200)
-    role_label: RoleLabel | None = Field(
+    role_label: str | None = Field(
         default=None,
-        description="User role label: admin, credit_officer, developer, viewer",
+        description="Optional display label update. Unknown values are coerced to 'viewer'.",
     )
     role_id: UUID | None = Field(
         default=None,

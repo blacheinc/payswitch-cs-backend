@@ -403,7 +403,7 @@ def _item_result(item: BatchJobItem) -> dict:
     return {
         "index": item.index,
         "status": item.status.value,
-        "score_request_id": item.score_request_id,
+        "score_request_id": str(item.score_request_id) if item.score_request_id else None,
         "score_tracking_id": item.score_tracking_id,
         "error_code": item.error_code,
         "error_message": item.error_message,
