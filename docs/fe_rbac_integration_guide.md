@@ -40,60 +40,60 @@ Errors from the RBAC layer follow the same envelope as all other errors:
 
 ### Platform-scoped (admin users only)
 
-| Code | Group | Description |
-|---|---|---|
-| `admin.organizations.create` | Organizations | Create new organizations |
-| `admin.organizations.read` | Organizations | View organizations and members |
-| `admin.organizations.update` | Organizations | Update organization details |
-| `admin.organizations.provision` | Organizations | Provision API keys and sandbox |
-| `admin.organizations.suspend` | Organizations | Suspend or reactivate an org |
-| `admin.training_data.upload` | Training Data | Upload training files and mappings |
-| `admin.training_data.read` | Training Data | View uploads, status, mappings |
-| `admin.training_data.approve` | Training Data | Approve or reject uploads |
-| `admin.sources.manage` | Data Sources | Create and manage data sources |
-| `admin.sources.read` | Data Sources | View data sources and templates |
-| `admin.roles.read` | Role Management | View platform roles |
-| `admin.roles.manage` | Role Management | Create, update, delete platform roles |
-| `admin.roles.assign` | Role Management | Assign roles to platform users |
-| `monitoring.risk` | Monitoring | Risk monitoring dashboard |
-| `monitoring.infrastructure` | Monitoring | Infrastructure monitoring dashboard |
-| `monitoring.model_ops` | Monitoring | Model operations dashboard |
-| `monitoring.compliance` | Monitoring | Compliance monitoring dashboard |
-| `monitoring.alerts` | Monitoring | View and manage alerts |
-| `models.read` | Models & Rules | View champion model metadata |
-| `rules.evaluate` | Models & Rules | Run sandbox rule evaluations |
+| Code | Name | Group | Description |
+|---|---|---|---|
+| `admin.organizations.create` | Create Organization | Organizations | Create new organizations |
+| `admin.organizations.read` | View Organizations | Organizations | View organizations and members |
+| `admin.organizations.update` | Update Organization | Organizations | Update organization details |
+| `admin.organizations.provision` | Provision Organization | Organizations | Provision API keys and sandbox |
+| `admin.organizations.suspend` | Suspend Organization | Organizations | Suspend or reactivate an org |
+| `admin.training_data.upload` | Upload Training Data | Training Data | Upload training files and mappings |
+| `admin.training_data.read` | View Training Data | Training Data | View uploads, status, mappings |
+| `admin.training_data.approve` | Approve Training Data | Training Data | Approve or reject uploads |
+| `admin.sources.manage` | Manage Data Sources | Data Sources | Create and manage data sources |
+| `admin.sources.read` | View Data Sources | Data Sources | View data sources and templates |
+| `admin.roles.read` | View Platform Roles | Role Management | View platform roles |
+| `admin.roles.manage` | Manage Platform Roles | Role Management | Create, update, delete platform roles |
+| `admin.roles.assign` | Assign Platform Roles | Role Management | Assign roles to platform users |
+| `monitoring.risk` | Risk Monitoring | Monitoring | Risk monitoring dashboard |
+| `monitoring.infrastructure` | Infrastructure Monitoring | Monitoring | Infrastructure monitoring dashboard |
+| `monitoring.model_ops` | Model Operations | Monitoring | Model operations dashboard |
+| `monitoring.compliance` | Compliance Monitoring | Monitoring | Compliance monitoring dashboard |
+| `monitoring.alerts` | Platform Alerts | Monitoring | View and manage alerts |
+| `models.read` | View Champion Model | Models & Rules | View champion model metadata |
+| `rules.evaluate` | Evaluate Rules | Models & Rules | Run sandbox rule evaluations |
 
 ### Org-scoped (org users and API keys)
 
-| Code | Group | Description |
-|---|---|---|
-| `score_requests.create` | Scoring | Submit credit score requests |
-| `score_requests.list` | Scoring | List credit score requests |
-| `score_requests.read` | Scoring | View individual score request and result |
-| `score_requests.override` | Scoring | Override a REFER decision manually |
-| `score_requests.report_outcome` | Scoring | Record a loan decision outcome |
-| `score_requests.report_performance` | Scoring | Report loan performance updates |
-| `batch_scoring.create` | Batch Scoring | Submit batch scoring jobs |
-| `batch_scoring.list` | Batch Scoring | List batch scoring jobs |
-| `batch_scoring.read` | Batch Scoring | View batch job status and results |
-| `batch_scoring.cancel` | Batch Scoring | Cancel a queued batch job |
-| `bureau.lookup` | Bureau | Look up credit bureau data |
-| `org.read` | Organization | View organization profile |
-| `org.update` | Organization | Update organization profile |
-| `users.invite` | User Management | Invite new users |
-| `users.list` | User Management | List organization users |
-| `users.update` | User Management | Update a user's name or role |
-| `users.suspend` | User Management | Suspend or reactivate users |
-| `users.delete` | User Management | Remove a user from the org |
-| `api_keys.create` | API Keys | Generate new API keys |
-| `api_keys.list` | API Keys | List API keys |
-| `api_keys.revoke` | API Keys | Revoke an API key |
-| `webhooks.manage` | Webhooks | Create, update, delete webhooks |
-| `webhooks.list` | Webhooks | List webhooks and events |
-| `api_logs.read` | API Logs | View API request logs |
-| `roles.read` | Role Management | View org roles |
-| `roles.manage` | Role Management | Create, update, delete org roles |
-| `roles.assign` | Role Management | Assign roles to org users |
+| Code | Name | Group | Description |
+|---|---|---|---|
+| `score_requests.create` | Submit Score Request | Scoring | Submit credit score requests |
+| `score_requests.list` | List Score Requests | Scoring | List credit score requests |
+| `score_requests.read` | View Score Request | Scoring | View individual score request and result |
+| `score_requests.override` | Override Decision | Scoring | Override a REFER decision manually |
+| `score_requests.report_outcome` | Report Loan Outcome | Scoring | Record a loan decision outcome |
+| `score_requests.report_performance` | Report Loan Performance | Scoring | Report loan performance updates |
+| `batch_scoring.create` | Submit Batch Job | Batch Scoring | Submit batch scoring jobs |
+| `batch_scoring.list` | List Batch Jobs | Batch Scoring | List batch scoring jobs |
+| `batch_scoring.read` | View Batch Job | Batch Scoring | View batch job status and results |
+| `batch_scoring.cancel` | Cancel Batch Job | Batch Scoring | Cancel a queued batch job |
+| `bureau.lookup` | Bureau Lookup | Bureau | Look up credit bureau data |
+| `org.read` | View Organization Profile | Organization | View organization profile |
+| `org.update` | Update Organization Profile | Organization | Update organization profile |
+| `users.invite` | Invite User | User Management | Invite new users |
+| `users.list` | List Users | User Management | List organization users |
+| `users.update` | Update User | User Management | Update a user's name or role |
+| `users.suspend` | Suspend User | User Management | Suspend or reactivate users |
+| `users.delete` | Remove User | User Management | Remove a user from the org |
+| `api_keys.create` | Create API Key | API Keys | Generate new API keys |
+| `api_keys.list` | List API Keys | API Keys | List API keys |
+| `api_keys.revoke` | Revoke API Key | API Keys | Revoke an API key |
+| `webhooks.manage` | Manage Webhooks | Webhooks | Create, update, delete webhooks |
+| `webhooks.list` | List Webhooks | Webhooks | List webhooks and events |
+| `api_logs.read` | View API Logs | API Logs | View API request logs |
+| `roles.read` | View Roles | Role Management | View org roles |
+| `roles.manage` | Manage Roles | Role Management | Create, update, delete org roles |
+| `roles.assign` | Assign Roles | Role Management | Assign roles to org users |
 
 ---
 
@@ -115,6 +115,7 @@ org users.
     {
       "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
       "code": "score_requests.create",
+      "name": "Submit Score Request",
       "group_name": "Scoring",
       "description": "Submit credit score requests",
       "scope": "org"
@@ -125,6 +126,8 @@ org users.
 ```
 
 Use this endpoint to populate the permission picker in the role builder UI.
+The `name` field is a short human-readable label suitable for checkbox labels and
+permission badges. Use `description` for tooltip or helper text.
 
 ### List roles
 
@@ -152,6 +155,7 @@ Returns roles visible to the caller:
         {
           "id": "uuid",
           "code": "score_requests.create",
+          "name": "Submit Score Request",
           "group_name": "Scoring",
           "description": "Submit credit score requests",
           "scope": "org"
@@ -167,9 +171,9 @@ Returns roles visible to the caller:
       "organization_id": "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed",
       "created_at": "2026-04-16T11:00:00Z",
       "permissions": [
-        { "id": "uuid", "code": "score_requests.create", "group_name": "Scoring", "description": "...", "scope": "org" },
-        { "id": "uuid", "code": "score_requests.read",   "group_name": "Scoring", "description": "...", "scope": "org" },
-        { "id": "uuid", "code": "score_requests.override","group_name": "Scoring", "description": "...", "scope": "org" }
+        { "id": "uuid", "code": "score_requests.create",  "name": "Submit Score Request", "group_name": "Scoring", "description": "...", "scope": "org" },
+        { "id": "uuid", "code": "score_requests.read",    "name": "View Score Request",   "group_name": "Scoring", "description": "...", "scope": "org" },
+        { "id": "uuid", "code": "score_requests.override","name": "Override Decision",    "group_name": "Scoring", "description": "...", "scope": "org" }
       ]
     }
   ],
@@ -463,7 +467,14 @@ The `group_name` field is designed for this. Group the `/v1/permissions` respons
 `group_name` to build a sectioned checkbox list:
 
 ```typescript
-type Permission = { id: string; code: string; group_name: string; description: string }
+type Permission = {
+  id: string
+  code: string
+  name: string        // short label, e.g. "Submit Score Request" — use as checkbox label
+  group_name: string  // section header in the role builder, e.g. "Scoring"
+  description: string // longer explanation — use as tooltip / helper text
+  scope: 'platform' | 'org'
+}
 
 function groupPermissions(permissions: Permission[]) {
   return permissions.reduce((acc, p) => {
@@ -474,6 +485,18 @@ function groupPermissions(permissions: Permission[]) {
 
 // Result keys: "Scoring", "Batch Scoring", "Bureau", "Organization",
 //              "User Management", "API Keys", "Webhooks", "API Logs", "Role Management"
+
+// Example: render a grouped checkbox list for the role builder
+// Object.entries(groupPermissions(permissions)).map(([group, perms]) => (
+//   <section key={group}>
+//     <h4>{group}</h4>
+//     {perms.map(p => (
+//       <label key={p.code} title={p.description}>
+//         <input type="checkbox" value={p.code} /> {p.name}
+//       </label>
+//     ))}
+//   </section>
+// ))
 ```
 
 ---

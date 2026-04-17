@@ -16,6 +16,7 @@ from app.schemas.common import BaseSchema
 class PermissionResponse(BaseSchema):
     id: UUID
     code: str
+    name: str
     group_name: str
     description: str
     scope: str
@@ -33,6 +34,7 @@ class RolePermissionItem(BaseModel):
     """Slim permission summary embedded inside a RoleResponse."""
     id: UUID
     code: str
+    name: str
     group_name: str
     description: str
     scope: str

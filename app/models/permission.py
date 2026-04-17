@@ -22,6 +22,8 @@ class Permission(UUIDPrimaryKeyMixin, Base):
 
     # e.g. "score_requests.create"
     code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    # Short user-friendly label shown in the UI, e.g. "Create API Key"
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     # UI grouping label, e.g. "Scoring"
     group_name: Mapped[str] = mapped_column(String(50), nullable=False)
     # Human-readable description shown in the role builder
