@@ -45,6 +45,15 @@ from app.services.permission_seeder import ALL_ORG_PERMISSION_CODES, ALL_PERMISS
 
 router = APIRouter(prefix="/v1", tags=["Permissions & Roles"])
 
+# ── Permission exclusions ─────────────────────────────────────────────────────
+# Permissions whose group_name appears here are omitted from GET /v1/permissions.
+# They still exist in the DB and are enforced server-side — they just aren't
+# surfaced in the role builder UI.  Add/remove group names here as needed.
+EXCLUDED_PERMISSION_GROUPS: frozenset[str] = frozenset([
+    "API Keys",
+    "Webhooks",
+])
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,11 +106,20 @@ async def list_permissions(
     - Org users: org-scoped permissions only (27).
     """
     if auth.user_type == "admin":
-        rows = (await db.execute(select(Permission))).scalars().all()
+        rows = (
+            await db.execute(
+                select(Permission).where(
+                    Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS)
+                )
+            )
+        ).scalars().all()
     else:
         rows = (
             await db.execute(
-                select(Permission).where(Permission.scope == "org")
+                select(Permission).where(
+                    Permission.scope == "org",
+                    Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS),
+                )
             )
         ).scalars().all()
 
