@@ -30,9 +30,11 @@ from app.db import get_db
 from app.dependencies import AuthContext, require_any_permission, require_permission
 from app.models.permission import Permission, Role, RolePermission
 from app.schemas.permissions import (
+    AssignRoleRequest,
     CreateRoleRequest,
     PermissionListResponse,
     PermissionResponse,
+    RoleActionResponse,
     RoleListResponse,
     RolePermissionItem,
     RoleResponse,
@@ -146,12 +148,12 @@ async def list_roles(
     return RoleListResponse(items=items, total=len(items))
 
 
-@router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/roles", response_model=RoleActionResponse, status_code=status.HTTP_201_CREATED)
 async def create_role(
     body: CreateRoleRequest,
     auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> RoleResponse:
+) -> RoleActionResponse:
     """Create a custom role.
 
     - Platform admins create platform-scoped roles (organization_id = None).
@@ -205,7 +207,8 @@ async def create_role(
             db.add(RolePermission(role_id=role.id, permission_id=p.id))
         await db.flush()
 
-    return await _role_to_response(db, role)
+    role_response = await _role_to_response(db, role)
+    return RoleActionResponse(message=f"Role '{role.name}' created", role=role_response)
 
 
 @router.get("/roles/{role_id}", response_model=RoleResponse)
@@ -229,13 +232,13 @@ async def get_role(
     return await _role_to_response(db, role)
 
 
-@router.patch("/roles/{role_id}", response_model=RoleResponse)
+@router.patch("/roles/{role_id}", response_model=RoleActionResponse)
 async def update_role(
     role_id: UUID,
     body: UpdateRoleRequest,
     auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> RoleResponse:
+) -> RoleActionResponse:
     role = (
         await db.execute(select(Role).where(Role.id == role_id))
     ).scalar_one_or_none()
@@ -279,7 +282,8 @@ async def update_role(
 
     await db.flush()
     await db.refresh(role)
-    return await _role_to_response(db, role)
+    role_response = await _role_to_response(db, role)
+    return RoleActionResponse(message=f"Role '{role.name}' updated", role=role_response)
 
 
 @router.delete("/roles/{role_id}", response_model=SuccessResponse)

@@ -78,3 +78,9 @@ class UpdateRoleRequest(BaseModel):
 
 class AssignRoleRequest(BaseModel):
     role_id: UUID = Field(description="ID of the role to assign")
+
+
+class RoleActionResponse(BaseModel):
+    """Returned by create and update role endpoints — message + full role data."""
+    message: str
+    role: RoleResponse
