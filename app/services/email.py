@@ -1,5 +1,9 @@
+import logging
+
 import resend
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class EmailService:
@@ -8,8 +12,15 @@ class EmailService:
         if self.settings.email_provider == "resend":
             resend.api_key = self.settings.resend_api_key
 
-    def send_email(self, to_email: str, subject: str, html_content: str):
-        """Send an email using the configured provider."""
+    def send_email(self, to_email: str, subject: str, html_content: str) -> dict | None:
+        """Send an email using the configured provider.
+
+        Never raises — delivery failures are logged and swallowed so that the
+        calling business flow (invite, password reset, provisioning, etc.)
+        completes successfully regardless of email provider availability.
+
+        Returns the provider response dict on success, or None on failure.
+        """
         if self.settings.email_provider == "console":
             print(f"--- EMAIL TO {to_email} ---")
             print(f"Subject: {subject}")
@@ -25,14 +36,17 @@ class EmailService:
                     "subject": subject,
                     "html": html_content,
                 }
-                email = resend.Emails.send(params)
-                return email
+                return resend.Emails.send(params)
             except Exception as e:
-                print(f"Failed to send email via Resend: {e}")
-                raise e
+                logger.warning(
+                    "[email] Failed to send '%s' to %s via Resend: %s",
+                    subject, to_email, e,
+                )
+                return None
 
-        # TODO: Implement SMTP/SendGrid if needed
-        print(f"Email provider '{self.settings.email_provider}' not implemented.")
+        # Unknown provider — log and return gracefully
+        logger.warning("[email] Provider '%s' not implemented — email not sent", self.settings.email_provider)
+        return None
 
     def send_password_reset_email(
         self, to_email: str, token: str, callback_url: str | None = None
