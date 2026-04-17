@@ -144,12 +144,14 @@ def create_app() -> FastAPI:
     from app.routers.monitoring import monitoring_router
     from app.routers.batch_scoring import router as batch_scoring_router
     from app.routers.permissions import router as permissions_router
+    from app.routers.admin_api_logs import router as admin_api_logs_router
 
     app.include_router(models_router)
     app.include_router(rules_router)
     app.include_router(monitoring_router)
     app.include_router(batch_scoring_router)
     app.include_router(permissions_router)
+    app.include_router(admin_api_logs_router)
 
     app.include_router(profile_router)
     app.include_router(users_router)

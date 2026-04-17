@@ -14,9 +14,9 @@ class ApiLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "api_logs"
 
-    # Organisation scope
-    organization_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    # Organisation scope — NULL for platform (admin) logs
+    organization_id: Mapped[str | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True, index=True
     )
 
     # Request metadata

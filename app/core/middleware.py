@@ -56,9 +56,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         except Exception:
             logger.warning("Failed to persist request metric", exc_info=True)
 
-        # Only log /v1/ organisation-facing routes
+        # Log org-facing (/v1/) and platform-facing (/admin/) authenticated routes
         path = request.url.path
-        if path.startswith("/v1/"):
+        if path.startswith("/v1/") or path.startswith("/admin/"):
             try:
                 await self._persist_api_log(
                     request, response, request_id, response_time_ms
@@ -109,8 +109,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         api_key_prefix = getattr(request.state, "api_key_prefix", None)
         user_id = getattr(request.state, "user_id", None)
 
-        # Skip logging if we couldn't resolve an organisation (e.g. bad auth)
-        if organization_id is None:
+        # Skip if neither an org nor a user could be resolved (e.g. bad auth,
+        # health-check endpoints, unauthenticated 401s).
+        if organization_id is None and user_id is None:
             return
 
         # Extract error detail for 4xx/5xx

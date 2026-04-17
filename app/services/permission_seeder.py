@@ -46,6 +46,8 @@ PERMISSIONS: list[dict] = [
     # Models & Rules
     {"code": "models.read",                       "name": "View Champion Model",        "group_name": "Models & Rules",  "description": "View current champion model metadata",                "scope": "platform"},
     {"code": "rules.evaluate",                    "name": "Evaluate Rules",             "group_name": "Models & Rules",  "description": "Run sandbox rule evaluations",                        "scope": "platform"},
+    # Platform API Logs
+    {"code": "admin.api_logs.read",               "name": "View Platform API Logs",     "group_name": "Platform Logs",   "description": "View platform-level API request logs",                "scope": "platform"},
 
     # ── Org scope ─────────────────────────────────────────────────────────
     # Scoring

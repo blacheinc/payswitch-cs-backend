@@ -636,9 +636,17 @@ async def list_api_logs(
     logs = result.scalars().all()
 
     from app.schemas.api_log import ApiLogResponse
+    from app.services.api_log_enrichment import pick_actor, resolve_actors
+
+    actors = await resolve_actors(db, logs)
 
     return PaginatedResponse.create(
-        items=[ApiLogResponse.model_validate(log) for log in logs],
+        items=[
+            ApiLogResponse.model_validate(log).model_copy(
+                update={"actor": pick_actor(log, actors)}
+            )
+            for log in logs
+        ],
         total=total,
         page=page,
         per_page=per_page,
