@@ -2,11 +2,15 @@
 
 POST  /v1/score/batch                   — submit a batch job
 GET   /v1/score/batch                   — list batch jobs for the org
-GET   /v1/score/batch/{jobId}           — job status + progress
-GET   /v1/score/batch/{jobId}/results   — paginated results table (DB)
-POST  /v1/score/batch/{jobId}/cancel    — cancel a queued job
+GET   /v1/score/batch/{job_id}          — per-item status counts + progress
+GET   /v1/score/batch/{job_id}/results  — paginated item results
+POST  /v1/score/batch/{job_id}/cancel   — cancel pending items in a queued job
 
-Auth: get_auth_context() — org API key or org user JWT.
+New flow (v2):
+  Frontend sends an array of bureau-lookup payloads (personal details).
+  The backend enqueues each as a BatchJobItem in Redis and returns immediately.
+  Background workers perform bureau lookup + scoring for each item internally,
+  updating BatchJobItem rows as they complete.
 """
 
 from __future__ import annotations
@@ -18,15 +22,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.db.base import utcnow
 from app.dependencies import AuthContext, require_permission
-from app.models.bulk_job import BulkJobStatus, BulkScoringJob, IngestionStatus
-from app.models.scoring_result import ScoringResult
+from app.models.batch_job_item import BatchJobItem, BatchJobItemStatus
+from app.models.bulk_job import BulkJobStatus, BulkScoringJob
 from app.schemas.batch_scoring import BatchScoreRequest
+from app.workers.batch_worker import QUEUE_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,7 @@ router = APIRouter(prefix="/v1/score/batch", tags=["Batch Scoring"])
 
 
 # ── POST /v1/score/batch ──────────────────────────────────────────────────────
+
 
 @router.post("")
 async def submit_batch_job(
@@ -43,16 +49,10 @@ async def submit_batch_job(
 ) -> JSONResponse:
     """Submit a batch scoring job.
 
-    Persists a BulkScoringJob record and publishes the job to the
-    batch-score-request Service Bus topic. The orchestrator picks it up
-    asynchronously and writes progress to blob storage.
+    Accepts up to 100 applicant payloads.  Each applicant needs the same
+    personal details as a bureau lookup (full_name/identification + date_of_birth).
+    Returns immediately with a job_id — poll GET /v1/score/batch/{job_id} for progress.
     """
-    if not auth.organization_id:
-        return JSONResponse(
-            status_code=403,
-            content={"error": "forbidden", "detail": "Organization context required"},
-        )
-
     job_id = (
         f"BATCH-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
         f"-{uuid.uuid4().hex[:8].upper()}"
@@ -63,26 +63,39 @@ async def submit_batch_job(
         job_id=job_id,
         organization_id=auth.organization_id,
         status=BulkJobStatus.QUEUED,
-        models_to_run=body.models_to_run,
-        total_records=len(body.applicants),
-        ingestion_status=IngestionStatus.PENDING,
+        total_records=len(body.items),
+        processed_records=0,
+        error_count=0,
         created_by_user_id=auth.user_id,
     )
     db.add(job)
-    await db.flush()  # get job.id before publishing
+    await db.flush()  # get job.id before creating items
 
-    # Publish to Service Bus
+    # Bulk-insert one BatchJobItem per array entry
+    items = [
+        BatchJobItem(
+            batch_job_id=job.id,
+            index=i,
+            status=BatchJobItemStatus.PENDING,
+            payload=item.model_dump(mode="json"),
+        )
+        for i, item in enumerate(body.items)
+    ]
+    db.add_all(items)
+    await db.flush()
+
+    # Push all item IDs onto the Redis queue (LPUSH = left-push, worker BRPOPs from right)
     try:
-        from app.core.events import get_event_publisher
+        from app.storage.cache import get_redis_cache
 
-        await get_event_publisher().publish_batch_scoring_job({
-            "job_id": job_id,
-            "requested_at": requested_at.isoformat().replace("+00:00", "Z"),
-            "models_to_run": body.models_to_run,
-            "applicants": [a.model_dump() for a in body.applicants],
-        })
+        client = await get_redis_cache().get_client()
+        # Pipeline the pushes for efficiency
+        pipe = client.pipeline()
+        for item in items:
+            pipe.lpush(QUEUE_KEY, str(item.id))
+        await pipe.execute()
     except Exception as e:
-        logger.error("[batch] Failed to publish job %s to Service Bus: %s", job_id, e)
+        logger.error("[batch] Failed to enqueue items for job %s: %s", job_id, e)
         return JSONResponse(
             status_code=503,
             content={
@@ -91,15 +104,16 @@ async def submit_batch_job(
             },
         )
 
+    # Commit everything only after Redis push succeeds
     await db.commit()
-    logger.info("[batch] Submitted job %s (%d applicants)", job_id, len(body.applicants))
+    logger.info("[batch] Submitted job %s (%d items)", job_id, len(body.items))
 
     return JSONResponse(
         status_code=202,
         content={
             "job_id": job_id,
             "status": "queued",
-            "total": len(body.applicants),
+            "total": len(body.items),
             "requested_at": requested_at.isoformat().replace("+00:00", "Z"),
         },
     )
@@ -107,37 +121,37 @@ async def submit_batch_job(
 
 # ── GET /v1/score/batch ───────────────────────────────────────────────────────
 
+
 @router.get("")
 async def list_batch_jobs(
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.list"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-    status: str | None = Query(None, description="Filter by status"),
+    status: str | None = Query(None, description="Filter by job status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> JSONResponse:
-    """List all batch jobs for the authenticated organization."""
-    if not auth.organization_id:
-        return JSONResponse(
-            status_code=403,
-            content={"error": "forbidden", "detail": "Organization context required"},
-        )
-
+    """List all batch jobs for the authenticated organisation."""
     q = select(BulkScoringJob).where(
         BulkScoringJob.organization_id == auth.organization_id,
-        BulkScoringJob.job_id.is_not(None),  # only API-submitted batch jobs
+        BulkScoringJob.job_id.is_not(None),
     )
     if status:
-        q = q.where(BulkScoringJob.status == status)
+        try:
+            q = q.where(BulkScoringJob.status == BulkJobStatus(status))
+        except ValueError:
+            pass  # ignore unknown status values
 
-    total = (await db.execute(
-        select(func.count()).select_from(q.subquery())
-    )).scalar() or 0
+    total = (
+        await db.execute(select(func.count()).select_from(q.subquery()))
+    ).scalar() or 0
 
-    jobs = (await db.execute(
-        q.order_by(BulkScoringJob.created_at.desc())
-         .offset((page - 1) * page_size)
-         .limit(page_size)
-    )).scalars().all()
+    jobs = (
+        await db.execute(
+            q.order_by(BulkScoringJob.created_at.desc())
+             .offset((page - 1) * page_size)
+             .limit(page_size)
+        )
+    ).scalars().all()
 
     return JSONResponse(
         status_code=200,
@@ -150,20 +164,16 @@ async def list_batch_jobs(
     )
 
 
-# ── GET /v1/score/batch/{jobId} ───────────────────────────────────────────────
+# ── GET /v1/score/batch/{job_id} ──────────────────────────────────────────────
+
 
 @router.get("/{job_id}")
 async def get_batch_job_status(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
-    """Return status and live progress for a batch job.
-
-    While the job is in_progress, the orchestrator keeps
-    model-artifacts/batch/{job_id}/status.json updated.
-    This endpoint merges that blob data with our DB record.
-    """
+    """Return status and per-item progress counts for a batch job."""
     job = await _get_job_or_404(db, job_id, auth.organization_id)
     if job is None:
         return JSONResponse(
@@ -171,35 +181,25 @@ async def get_batch_job_status(
             content={"error": "not_found", "detail": f"Batch job '{job_id}' not found"},
         )
 
-    # Merge with live blob status (authoritative for in-flight progress)
-    blob_status = None
-    if job.status in (BulkJobStatus.QUEUED, BulkJobStatus.PROCESSING):
-        try:
-            from app.storage.batch_blob import read_batch_status
-            blob_status = read_batch_status(job_id)
-        except Exception as e:
-            logger.warning("[batch] Could not read blob status for %s: %s", job_id, e)
+    # Aggregate item counts directly from DB — no blob storage needed
+    count_rows = (
+        await db.execute(
+            select(BatchJobItem.status, func.count())
+            .where(BatchJobItem.batch_job_id == job.id)
+            .group_by(BatchJobItem.status)
+        )
+    ).all()
+    counts = {row[0]: row[1] for row in count_rows}
 
-    total = job.total_records
-    completed = job.processed_records
-    failed = job.error_count
-    updated_at = None
+    pending    = counts.get(BatchJobItemStatus.PENDING, 0)
+    processing = counts.get(BatchJobItemStatus.PROCESSING, 0)
+    completed  = counts.get(BatchJobItemStatus.COMPLETED, 0)
+    failed     = counts.get(BatchJobItemStatus.FAILED, 0)
+    cancelled  = counts.get(BatchJobItemStatus.CANCELLED, 0)
+    total      = job.total_records or 0
+    done       = completed + failed + cancelled
 
-    if blob_status:
-        total = blob_status.get("total", total)
-        completed = blob_status.get("completed", completed)
-        failed = blob_status.get("failed", failed)
-        updated_at = blob_status.get("updated_at")
-
-        # Sync status from blob if orchestrator has moved it forward
-        blob_job_status = blob_status.get("status", "")
-        if blob_job_status == "in_progress" and job.status == BulkJobStatus.QUEUED:
-            job.status = BulkJobStatus.PROCESSING
-            await db.commit()
-
-    progress_pct = (
-        round(completed / total * 100) if total and total > 0 else 0
-    )
+    progress_pct = round(done / total * 100) if total > 0 else 0
 
     return JSONResponse(
         status_code=200,
@@ -207,13 +207,19 @@ async def get_batch_job_status(
             "job_id": job_id,
             "status": _map_status(job.status),
             "total": total,
-            "completed": completed,
-            "failed": failed,
             "progress_pct": progress_pct,
-            "ingestion_status": job.ingestion_status.value,
-            "ingested_count": job.ingested_count,
+            "items": {
+                "pending": pending,
+                "processing": processing,
+                "completed": completed,
+                "failed": failed,
+                "cancelled": cancelled,
+            },
             "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
-            "updated_at": updated_at,
+            "started_at": (
+                job.started_at.isoformat().replace("+00:00", "Z")
+                if job.started_at else None
+            ),
             "completed_at": (
                 job.completed_at.isoformat().replace("+00:00", "Z")
                 if job.completed_at else None
@@ -222,26 +228,29 @@ async def get_batch_job_status(
     )
 
 
-# ── GET /v1/score/batch/{jobId}/results ──────────────────────────────────────
+# ── GET /v1/score/batch/{job_id}/results ─────────────────────────────────────
+
 
 @router.get("/{job_id}/results")
 async def get_batch_results(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-    decision: str | None = Query(None, description="Filter by decision outcome"),
-    risk_tier: str | None = Query(None, description="Filter by risk tier"),
-    score_grade: str | None = Query(None, description="Filter by score grade"),
-    sort_by: str = Query("scoring_timestamp", pattern="^(credit_score|probability_of_default|scoring_timestamp)$"),
-    order: str = Query("desc", pattern="^(asc|desc)$"),
+    status: str | None = Query(
+        None,
+        description="Filter items by status: completed | failed | pending | cancelled",
+    ),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
+    page_size: int = Query(50, ge=1, le=100),
 ) -> JSONResponse:
-    """Return paginated scoring results for a completed batch job.
+    """Return paginated per-item results for a batch job.
 
-    Results are only available once ingestion_status == "complete".
-    While ingestion is running, the response will indicate the current
-    ingested_count so the frontend can show a progress state.
+    Items are returned as soon as they are processed — no need to wait for the
+    entire job to complete.  Use the ``status`` filter to show only failed items
+    or only successful ones.
+
+    Each completed item includes a ``score_request_id`` and ``score_tracking_id``
+    the frontend can use to deep-link into the individual scoring result.
     """
     job = await _get_job_or_404(db, job_id, auth.organization_id)
     if job is None:
@@ -250,60 +259,30 @@ async def get_batch_results(
             content={"error": "not_found", "detail": f"Batch job '{job_id}' not found"},
         )
 
-    if job.ingestion_status == IngestionStatus.PENDING:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "job_id": job_id,
-                "ingestion_status": "pending",
-                "items": [],
-                "total": 0,
-                "page": page,
-                "page_size": page_size,
-            },
+    q = select(BatchJobItem).where(BatchJobItem.batch_job_id == job.id)
+    if status:
+        try:
+            q = q.where(BatchJobItem.status == BatchJobItemStatus(status))
+        except ValueError:
+            pass
+
+    total = (
+        await db.execute(select(func.count()).select_from(q.subquery()))
+    ).scalar() or 0
+
+    items = (
+        await db.execute(
+            q.order_by(BatchJobItem.index)
+             .offset((page - 1) * page_size)
+             .limit(page_size)
         )
-
-    # Build results query
-    q = select(ScoringResult).where(ScoringResult.bulk_job_id == job.id)
-
-    # Filters on JSONB fields
-    if decision:
-        q = q.where(ScoringResult.decision == decision)
-    if risk_tier:
-        q = q.where(
-            ScoringResult.credit_risk["risk_tier"].as_string() == risk_tier
-        )
-    if score_grade:
-        q = q.where(
-            ScoringResult.scoring_metadata["score_grade"].as_string() == score_grade
-        )
-
-    total = (await db.execute(
-        select(func.count()).select_from(q.subquery())
-    )).scalar() or 0
-
-    # Sorting — map friendly names to column/JSONB expressions
-    sort_col = {
-        "scoring_timestamp": ScoringResult.scoring_timestamp,
-        "credit_score": ScoringResult.scoring_metadata["credit_score"].as_integer(),
-        "probability_of_default": ScoringResult.credit_risk["probability_of_default"].as_float(),
-    }[sort_by]
-
-    if order == "desc":
-        sort_col = sort_col.desc()
-
-    results = (await db.execute(
-        q.order_by(sort_col)
-         .offset((page - 1) * page_size)
-         .limit(page_size)
-    )).scalars().all()
+    ).scalars().all()
 
     return JSONResponse(
         status_code=200,
         content={
             "job_id": job_id,
-            "ingestion_status": job.ingestion_status.value,
-            "items": [_result_item(r) for r in results],
+            "items": [_item_result(i) for i in items],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -311,18 +290,22 @@ async def get_batch_results(
     )
 
 
-# ── POST /v1/score/batch/{jobId}/cancel ──────────────────────────────────────
+# ── POST /v1/score/batch/{job_id}/cancel ─────────────────────────────────────
+
 
 @router.post("/{job_id}/cancel")
 async def cancel_batch_job(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.create"))],
+    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.cancel"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
-    """Cancel a queued batch job.
+    """Cancel a batch job.
 
-    Only possible while status is 'queued' — once the orchestrator has
-    started processing, cancellation is no longer available.
+    All PENDING items are marked CANCELLED immediately.  Items currently being
+    processed (status=processing) will finish naturally — the worker checks the
+    status before starting and skips non-PENDING items.
+
+    Only jobs in 'queued' or 'processing' state can be cancelled.
     """
     job = await _get_job_or_404(db, job_id, auth.organization_id)
     if job is None:
@@ -331,39 +314,60 @@ async def cancel_batch_job(
             content={"error": "not_found", "detail": f"Batch job '{job_id}' not found"},
         )
 
-    if job.status != BulkJobStatus.QUEUED:
+    if job.status not in (BulkJobStatus.QUEUED, BulkJobStatus.PROCESSING):
         return JSONResponse(
             status_code=409,
             content={
                 "error": "conflict",
                 "detail": (
-                    f"Job cannot be cancelled — current status is '{job.status.value}'. "
-                    "Only queued jobs can be cancelled."
+                    f"Job cannot be cancelled — current status is "
+                    f"'{job.status.value}'. Only queued or processing jobs can be cancelled."
                 ),
             },
         )
 
+    # Cancel all pending items in bulk
+    pending_items = (
+        await db.execute(
+            select(BatchJobItem).where(
+                BatchJobItem.batch_job_id == job.id,
+                BatchJobItem.status == BatchJobItemStatus.PENDING,
+            )
+        )
+    ).scalars().all()
+
+    cancelled_count = 0
+    for item in pending_items:
+        item.status = BatchJobItemStatus.CANCELLED
+        cancelled_count += 1
+
     job.status = BulkJobStatus.CANCELLED
     await db.commit()
-    logger.info("[batch] Job %s cancelled by %s", job_id, auth.user_id or "api_key")
+
+    logger.info(
+        "[batch] Job %s cancelled by %s — %d pending items cancelled",
+        job_id, auth.user_id or "api_key", cancelled_count,
+    )
 
     return JSONResponse(
         status_code=200,
-        content={"job_id": job_id, "status": "cancelled"},
+        content={
+            "job_id": job_id,
+            "status": "cancelled",
+            "cancelled_items": cancelled_count,
+        },
     )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 async def _get_job_or_404(
     db: AsyncSession,
     job_id: str,
     organization_id,
 ) -> BulkScoringJob | None:
-    """Fetch a BulkScoringJob scoped to the organization."""
-    q = select(BulkScoringJob).where(
-        BulkScoringJob.job_id == job_id,
-    )
+    q = select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
     if organization_id:
         q = q.where(BulkScoringJob.organization_id == organization_id)
     return (await db.execute(q)).scalar_one_or_none()
@@ -372,8 +376,8 @@ async def _get_job_or_404(
 def _map_status(status: BulkJobStatus) -> str:
     return {
         BulkJobStatus.QUEUED: "queued",
-        BulkJobStatus.PROCESSING: "in_progress",
-        BulkJobStatus.COMPLETED: "complete",
+        BulkJobStatus.PROCESSING: "processing",
+        BulkJobStatus.COMPLETED: "completed",
         BulkJobStatus.FAILED: "failed",
         BulkJobStatus.CANCELLED: "cancelled",
         BulkJobStatus.VALIDATING: "validating",
@@ -387,7 +391,6 @@ def _job_list_item(job: BulkScoringJob) -> dict:
         "total": job.total_records,
         "completed": job.processed_records,
         "failed": job.error_count,
-        "ingestion_status": job.ingestion_status.value,
         "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
         "completed_at": (
             job.completed_at.isoformat().replace("+00:00", "Z")
@@ -396,22 +399,17 @@ def _job_list_item(job: BulkScoringJob) -> dict:
     }
 
 
-def _result_item(r: ScoringResult) -> dict:
-    credit_risk = r.credit_risk or {}
-    loan = r.loan_amount or {}
-    fraud = r.fraud_detection or {}
-    meta = r.scoring_metadata or {}
+def _item_result(item: BatchJobItem) -> dict:
     return {
-        "request_id": r.request_id,
-        "decision": r.decision.value if r.decision else None,
-        "credit_score": meta.get("credit_score"),
-        "score_grade": meta.get("score_grade"),
-        "risk_tier": credit_risk.get("risk_tier"),
-        "probability_of_default": credit_risk.get("probability_of_default"),
-        "recommended_amount_ghs": loan.get("recommended_amount_ghs"),
-        "fraud_risk_flag": fraud.get("fraud_risk_flag"),
-        "scoring_timestamp": (
-            r.scoring_timestamp.isoformat().replace("+00:00", "Z")
-            if r.scoring_timestamp else None
+        "index": item.index,
+        "status": item.status.value,
+        "score_request_id": item.score_request_id,
+        "score_tracking_id": item.score_tracking_id,
+        "error_code": item.error_code,
+        "error_message": item.error_message,
+        "payload": item.payload,
+        "completed_at": (
+            item.completed_at.isoformat().replace("+00:00", "Z")
+            if item.completed_at else None
         ),
     }

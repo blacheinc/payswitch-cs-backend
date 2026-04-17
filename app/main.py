@@ -43,7 +43,6 @@ async def lifespan(app: FastAPI):
 
     # Start subscribers
     from app.core.events import get_event_publisher
-    from app.subscribers.batch_complete import handle_batch_score_complete
     from app.subscribers.scoring_complete import handle_scoring_complete
     from app.subscribers.training import handle_model_training_completed
     from app.subscribers.training_started import handle_model_training_started
@@ -64,16 +63,23 @@ async def lifespan(app: FastAPI):
         subscription_name=settings.azure_servicebus_sub_backend,
         handler=handle_scoring_complete,
     )
-    event_publisher.subscribe(
-        topic_name=settings.azure_servicebus_topic_batch_score_complete,
-        subscription_name=settings.azure_servicebus_sub_backend,
-        handler=handle_batch_score_complete,
-    )
+
+    # Start internal batch scoring workers (Redis queue consumers)
+    from app.workers.batch_worker import start_batch_workers
+    _batch_worker_tasks = start_batch_workers()
 
     yield
 
     # Shutdown
     logger.info("Shutting down...")
+
+    # Cancel batch workers gracefully
+    for task in _batch_worker_tasks:
+        task.cancel()
+    import asyncio as _asyncio
+    await _asyncio.gather(*_batch_worker_tasks, return_exceptions=True)
+    logger.info("Batch workers stopped")
+
     from app.core.events import get_event_publisher
 
     event_publisher = get_event_publisher()
