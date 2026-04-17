@@ -161,6 +161,7 @@ class ScoreError(BaseModel):
 class ScoreRequestResponse(BaseModel):
     """Full score response – matches PRD Section 7.2."""
 
+    message: str = "Score request submitted successfully. Your request is being processed."
     request_id: str
     reference_id: str | None = None
     status: str
@@ -350,6 +351,7 @@ class ScoringResultResponse(BaseModel):
 class HardStopDeclineResponse(BaseModel):
     """Response when an applicant is immediately declined by hard-stop rules."""
 
+    message: str = "Application declined — eligibility criteria not met."
     request_id: str
     status: str = "DECLINED"
     decision: str = "DECLINE"

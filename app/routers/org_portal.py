@@ -176,7 +176,7 @@ async def invite_user(
         email=body.email,
         name=body.name,
         password_hash=hash_password(temp_password),
-        role_label=OrgRoleLabel(body.role_label),
+        role_label=_coerce_role_label(body.role_label),
         status=OrgUserStatus.ACTIVE,
         email_verification_token=generate_email_verification_token(),
     )
@@ -305,7 +305,7 @@ async def update_user(
     new_role_id = update_data.pop("role_id", None)
 
     if "role_label" in update_data and update_data["role_label"] is not None:
-        update_data["role_label"] = OrgRoleLabel(update_data["role_label"])
+        update_data["role_label"] = _coerce_role_label(update_data["role_label"])
 
     for field, value in update_data.items():
         setattr(target, field, value)
