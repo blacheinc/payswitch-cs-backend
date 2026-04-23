@@ -89,17 +89,6 @@ async def get_current_admin(
     return user
 
 
-async def require_super_admin(
-    admin: Annotated[AdminUser, Depends(get_current_admin)],
-) -> AdminUser:
-    """Require super_admin role."""
-    from app.models.user import AdminRole
-
-    if admin.role != AdminRole.SUPER_ADMIN:
-        raise AuthorizationError("Super admin access required")
-    return admin
-
-
 # ── Organization User Authentication (JWT) ───────────────────────────────────
 
 

@@ -26,8 +26,8 @@ import uuid
 import httpx
 
 BASE = "http://localhost:8000"
-ORG_USER_EMAIL = "test_org_user@mailinator.com"
-ORG_USER_PASS = "Testing123!"
+ORG_USER_EMAIL = "kwame.nkrumah@mailinator.com"
+ORG_USER_PASS = "Abcd1234$$"
 
 # Max seconds to wait for the job to finish. XDS + DE calls can be slow.
 POLL_TIMEOUT_S = 180

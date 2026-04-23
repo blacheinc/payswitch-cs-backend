@@ -11,7 +11,7 @@ There are **two scopes**:
 
 | Scope | Who uses it | System role | Permission pool |
 |---|---|---|---|
-| `platform` | Admin / staff users | `SUPER_ADMIN` | All 47 permissions |
+| `platform` | Admin / staff users | `SUPER_ADMIN` | All 27 platform permissions (see [admin RBAC guide](./fe_admin_rbac_integration_guide.md) for the full role matrix) |
 | `org` | Organisation users & API keys | `ADMIN` | 27 org-scoped permissions only |
 
 Org users **cannot** see or be assigned platform-scoped permissions. Admin users can
@@ -106,7 +106,7 @@ GET /v1/permissions
 Authorization: Bearer <token>
 ```
 
-Returns only what the caller's scope allows: all 47 for admin users, 27 org-scoped for
+Returns only what the caller's scope allows: all 54 for admin users, 27 org-scoped for
 org users.
 
 ```json
