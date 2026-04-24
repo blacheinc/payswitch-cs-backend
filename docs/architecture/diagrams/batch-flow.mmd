@@ -1,0 +1,40 @@
+%% Batch scoring flow — POST /v1/score/batch
+
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant API as FastAPI /v1/score/batch
+  participant DB as Postgres
+  participant Q as Redis queue<br/>(batch:queue)
+  participant W as Worker pool<br/>(5 × asyncio tasks)
+  participant XDS as XDS Bureau
+  participant DE as DE Inference
+
+  C->>API: POST /v1/score/batch<br/>{items: [ {personal_details}, ... ]}
+  API->>DB: insert BulkScoringJob (status=QUEUED)
+  API->>DB: bulk-insert N × BatchJobItem (status=PENDING)
+  API->>Q: LPUSH item_id (×N)
+  API-->>C: 202 {job_id, total, status=queued}
+
+  par per-worker loop
+    W->>Q: BRPOP item_id
+    W->>DB: set item.status=PROCESSING
+    W->>XDS: full_bureau_lookup(...)
+    alt bureau OK
+      W->>DE: POST inference
+      alt DE 2xx
+        W->>DB: ScoreRequest + ScoringResult (decision)<br/>item.status=COMPLETED
+      else DE failure
+        W->>DB: ScoringResult(decision=ERROR)<br/>item.status=FAILED (scoring_error)
+      end
+    else bureau error
+      W->>DB: item.status=FAILED (bureau_failed)
+    end
+    W->>DB: update BulkScoringJob counters<br/>+ finalize status when all items terminal
+  end
+
+  loop polling
+    C->>API: GET /v1/score/batch/{job_id}
+    API->>DB: aggregate per-status counts
+    API-->>C: {status, progress_pct, items: {pending, processing, completed, failed, cancelled}}
+  end

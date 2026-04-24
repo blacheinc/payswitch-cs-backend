@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "_comment": "Fill every <PLACEHOLDER> before running the deploy. Anything marked @secure() should be supplied via --parameters key=value on the command line or through a parameter override, NOT committed to source control. See infra/bicep/README.md.",
+  "parameters": {
+    "location":               { "value": "westeurope" },
+    "resourceGroupName":      { "value": "rg-payswitch-prod" },
+    "namePrefix":             { "value": "psc" },
+    "environment":            { "value": "prod" },
+
+    "appPrincipalObjectId":   { "value": "<SP_OBJECT_ID>" },
+    "appClientId":            { "value": "<SP_APP_ID>" },
+    "appClientSecret":        { "value": "<SP_CLIENT_SECRET>" },
+    "adminObjectIds":         { "value": [] },
+
+    "postgresAdminLogin":     { "value": "psadmin" },
+    "postgresAdminPassword":  { "value": "<STRONG_PG_PASSWORD>" },
+
+    "jwtSecretKey":           { "value": "<RANDOM_64_CHAR_STRING>" },
+
+    "xdsUsername":            { "value": "<XDS_USER>" },
+    "xdsPassword":            { "value": "<XDS_PASS>" },
+
+    "resendApiKey":           { "value": "" },
+
+    "deInferenceUrl":         { "value": "https://<de-function>.azurewebsites.net/api/transform/inference" },
+    "deInferenceCode":        { "value": "<DE_FUNCTION_KEY>" },
+    "orchestratorBaseUrl":    { "value": "https://<orchestrator-function>.azurewebsites.net" },
+    "orchestratorFunctionKey":{ "value": "<ORCH_FUNCTION_KEY>" },
+    "customerServiceBaseUrl": { "value": "" },
+    "customerServiceFunctionKey": { "value": "" },
+
+    "dashboardBaseUrl":       { "value": "https://dashboard.<client-domain>" },
+    "emailFrom":              { "value": "noreply@<client-domain>" },
+    "allowedOrigins":         { "value": "https://dashboard.<client-domain>" },
+
+    "bootstrapAdminEmail":    { "value": "admin@<client-domain>" },
+    "bootstrapAdminPassword": { "value": "<ROTATE_AFTER_FIRST_LOGIN>" }
+  }
+}

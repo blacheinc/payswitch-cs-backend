@@ -48,14 +48,24 @@ class EmailService:
         logger.warning("[email] Provider '%s' not implemented — email not sent", self.settings.email_provider)
         return None
 
+    def _dashboard_link(self, path: str) -> str:
+        """Build an absolute link into the configured dashboard.
+
+        ``path`` should start with a leading slash. Falls back to just the
+        path when no ``dashboard_base_url`` has been configured — the
+        operator is expected to set this for any non-dev deployment so the
+        link renders correctly in outbound emails.
+        """
+        base = (self.settings.dashboard_base_url or "").rstrip("/")
+        return f"{base}{path}" if base else path
+
     def send_password_reset_email(
         self, to_email: str, token: str, callback_url: str | None = None
     ):
         if callback_url:
             link = f"{callback_url}?token={token}"
         else:
-            # Fallback to a default or just the token
-            link = f"https://dashboard.payswitch.com.gh/reset-password?token={token}"
+            link = f"{self._dashboard_link('/reset-password')}?token={token}"
 
         subject = "Reset your password"
         html = f"""
@@ -69,9 +79,7 @@ class EmailService:
     def send_invite_email(
         self, to_email: str, temp_password: str, callback_url: str | None = None
     ):
-        link = (
-            callback_url if callback_url else "https://dashboard.payswitch.com.gh/login"
-        )
+        link = callback_url or self._dashboard_link("/login")
 
         subject = "You have been invited to PaySwitch Credit Scoring"
         html = f"""
@@ -85,9 +93,7 @@ class EmailService:
     def send_provision_email(
         self, to_email: str, temp_password: str, callback_url: str | None = None
     ):
-        link = (
-            callback_url if callback_url else "https://dashboard.payswitch.com.gh/setup"
-        )
+        link = callback_url or self._dashboard_link("/setup")
 
         subject = "Your PaySwitch Organization is Ready"
         html = f"""

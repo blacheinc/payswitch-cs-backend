@@ -1,0 +1,64 @@
+%% PaySwitch Credit Scoring — system architecture
+%% Rendered by GitHub, VS Code (Mermaid preview), and any Mermaid tool.
+
+flowchart LR
+
+  subgraph Clients["Clients"]
+    FE["Dashboard (SPA)"]
+    INT["B2B Integrators (API keys)"]
+  end
+
+  subgraph ACA["Azure Container Apps"]
+    API["FastAPI backend<br/>(HTTP API + in-process batch workers)"]
+  end
+
+  subgraph Data["Managed data services"]
+    PG[("PostgreSQL<br/>(Flexible Server)")]
+    REDIS[("Redis Cache<br/>(rate limit · batch queue · idempotency)")]
+    SB[["Service Bus<br/>(6 topics · 3 subs)"]]
+    STO[("Blob Storage<br/>(uploads · training · reports · artifacts)")]
+  end
+
+  subgraph Secrets["Secrets"]
+    KV[("Key Vault<br/>(12 secrets)")]
+  end
+
+  subgraph External["External services"]
+    XDS["XDS Credit Bureau<br/>(REST)"]
+    DE["DE Inference Function<br/>(Azure Function)"]
+    ORCH["Orchestrator Function<br/>(rule evaluation)"]
+    EMAIL["Resend / SMTP<br/>(transactional email)"]
+  end
+
+  subgraph Obs["Observability"]
+    LA[("Log Analytics")]
+    ACR[("Container Registry")]
+  end
+
+  FE -->|JWT| API
+  INT -->|API key| API
+
+  API -->|asyncpg / TLS| PG
+  API -->|rediss TLS| REDIS
+  API -->|AMQP SAS| SB
+  API -->|Blob SDK| STO
+  API -->|SP client-id + secret| KV
+
+  API -->|HTTPS + host key| DE
+  API -->|HTTPS + host key| ORCH
+  API -->|HTTPS| XDS
+  API -->|HTTPS| EMAIL
+
+  SB -.->|scoring.complete<br/>training.*| API
+
+  API -->|stdout / stderr| LA
+  ACA -->|pulls image| ACR
+
+  classDef external fill:#fff3e6,stroke:#d08a3a
+  classDef data fill:#e6f0ff,stroke:#2a5db0
+  classDef secret fill:#ffe6e6,stroke:#b23030
+  classDef obs fill:#eef7ee,stroke:#3c8c3c
+  class XDS,DE,ORCH,EMAIL external
+  class PG,REDIS,SB,STO data
+  class KV secret
+  class LA,ACR obs

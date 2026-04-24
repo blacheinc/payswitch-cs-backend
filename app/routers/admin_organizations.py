@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.pagination import PaginatedResponse
 from app.core.security import (
     generate_api_key,
@@ -199,11 +199,19 @@ async def provision_organization(
     # Activate
     org.status = OrgStatus.ACTIVE
 
-    # Create org admin user
+    # Create org admin user — primary_contact_email is required because the
+    # provisioning email (with the temp password) must reach a real mailbox
+    # owned by the organization.
+    if not org.primary_contact_email:
+        raise ValidationError(
+            "Organization has no primary_contact_email — cannot provision. "
+            "Update the organization profile first."
+        )
+
     temp_password = generate_temp_password()
     org_admin = OrgUser(
         organization_id=org.id,
-        email=org.primary_contact_email or f"admin@{org.short_name}.payswitch.com",
+        email=org.primary_contact_email,
         name=org.primary_contact_name or f"{org.name} Admin",
         password_hash=hash_password(temp_password),
         role_label=OrgRoleLabel.ADMIN,

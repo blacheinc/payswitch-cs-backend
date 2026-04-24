@@ -1,0 +1,250 @@
+%% PaySwitch Credit Scoring — condensed ER diagram
+%% Only the most load-bearing columns are listed; full column lists live
+%% in the SQLAlchemy models under app/models/.
+
+erDiagram
+
+  %% ── Identity & RBAC ──────────────────────────────────────────────────────
+  ORGANIZATION ||--o{ ORG_USER            : has
+  ORGANIZATION ||--o{ API_KEY             : issues
+  ORGANIZATION ||--o{ WEBHOOK_CONFIG      : has
+  ORGANIZATION ||--o{ SCORE_REQUEST       : scopes
+  ORGANIZATION ||--o{ BULK_SCORING_JOB    : scopes
+  ORGANIZATION ||--o{ ROLE                : "org-scoped custom roles"
+
+  ORG_USER     ||--o{ ORG_USER_ROLE       : assigned
+  ADMIN_USER   ||--o{ ADMIN_USER_ROLE     : assigned
+  ROLE         ||--o{ ORG_USER_ROLE       : ""
+  ROLE         ||--o{ ADMIN_USER_ROLE     : ""
+  ROLE         ||--o{ ROLE_PERMISSION     : grants
+  PERMISSION   ||--o{ ROLE_PERMISSION     : ""
+  ROLE         ||--o{ API_KEY             : "optionally scoped by"
+
+  ORGANIZATION {
+    uuid    id PK
+    string  name
+    string  short_name
+    enum    status         "PENDING | ACTIVE | SUSPENDED"
+    enum    industry_type
+    string  primary_contact_email
+  }
+  ORG_USER {
+    uuid    id PK
+    uuid    organization_id FK
+    string  email
+    string  password_hash
+    enum    status         "PENDING | ACTIVE | SUSPENDED | REMOVED"
+    string  role_label     "display only (legacy)"
+  }
+  ADMIN_USER {
+    uuid    id PK
+    string  email
+    string  password_hash
+    enum    status         "ACTIVE | DEACTIVATED"
+    bool    totp_enabled
+  }
+  PERMISSION {
+    uuid    id PK
+    string  code           "unique, e.g. monitoring.risk"
+    string  scope          "platform | org"
+    string  group_name
+  }
+  ROLE {
+    uuid    id PK
+    string  name
+    string  scope
+    bool    is_system
+    uuid    organization_id FK "null for platform + system roles"
+  }
+  ROLE_PERMISSION {
+    uuid    role_id        PK,FK
+    uuid    permission_id  PK,FK
+  }
+  ORG_USER_ROLE {
+    uuid    org_user_id    PK,FK
+    uuid    role_id        PK,FK
+    uuid    assigned_by
+  }
+  ADMIN_USER_ROLE {
+    uuid    admin_user_id  PK,FK
+    uuid    role_id        PK,FK
+  }
+  API_KEY {
+    uuid    id PK
+    uuid    organization_id FK
+    uuid    role_id         FK
+    string  key_hash        "sha256"
+    string  key_prefix
+    enum    environment     "SANDBOX | PRODUCTION"
+    enum    status          "ACTIVE | REVOKED"
+  }
+
+  %% ── Scoring ──────────────────────────────────────────────────────────────
+  SCORE_REQUEST ||--o| SCORE_DECISION    : "has-one"
+  SCORE_REQUEST ||--o| SCORING_RESULT    : "has-one"
+  SCORE_REQUEST ||--o{ LOAN_PERFORMANCE  : tracks
+  SCORING_RESULT ||--o| DECISION_METRIC  : summarizes
+
+  SCORE_REQUEST {
+    uuid    id PK
+    string  tracking_id    "SCR-xxxxxxxxxxxx"
+    uuid    organization_id FK
+    uuid    api_key_id     FK
+    enum    status         "PENDING | PROCESSING | COMPLETED | FAILED"
+    enum    request_source "API | WEB_PORTAL | BULK"
+    int     score_value
+    string  risk_category
+    string  model_version
+    string  callback_url
+  }
+  SCORING_RESULT {
+    uuid    id PK
+    string  request_id     "= ScoreRequest.tracking_id"
+    uuid    score_request_id FK
+    uuid    bulk_job_id    FK
+    enum    decision       "APPROVE | CONDITIONAL_APPROVE | REFER | DECLINE | FRAUD_HOLD | ERROR"
+    jsonb   credit_risk
+    jsonb   fraud_detection
+    jsonb   loan_amount
+    jsonb   income_verification
+  }
+  SCORE_DECISION {
+    uuid    id PK
+    uuid    score_request_id FK
+    enum    decision
+    decimal approved_amount
+    int     approved_tenure
+  }
+  LOAN_PERFORMANCE {
+    uuid    id PK
+    uuid    score_request_id FK
+    enum    status         "CURRENT | PAST_DUE_30/60/90 | DEFAULT | PAID_OFF | WRITE_OFF"
+    int     days_past_due
+  }
+
+  %% ── Batch Scoring ────────────────────────────────────────────────────────
+  BULK_SCORING_JOB ||--o{ BATCH_JOB_ITEM : contains
+  BATCH_JOB_ITEM   ||--o| SCORE_REQUEST  : "links-to (on success)"
+
+  BULK_SCORING_JOB {
+    uuid    id PK
+    string  job_id         "BATCH-YYYYMMDD-xxxxxxxx"
+    uuid    organization_id FK
+    enum    status         "QUEUED | PROCESSING | COMPLETED | FAILED | CANCELLED"
+    int     total_records
+    int     processed_records
+    int     error_count
+  }
+  BATCH_JOB_ITEM {
+    uuid    id PK
+    uuid    batch_job_id   FK
+    int     index
+    enum    status         "PENDING | PROCESSING | COMPLETED | FAILED | CANCELLED"
+    jsonb   payload
+    string  score_tracking_id
+    string  error_code     "bureau_failed | scoring_error"
+  }
+
+  %% ── Training & Data Sources ──────────────────────────────────────────────
+  DATA_SOURCE      ||--o{ TRAINING_UPLOAD : has
+  DATA_SOURCE      ||--o{ MAPPING_TEMPLATE : has
+  TRAINING_UPLOAD  ||--o{ FIELD_MAPPING    : produces
+  TRAINING_UPLOAD  ||--o{ MODEL_VERSION    : trains
+
+  DATA_SOURCE {
+    uuid    id PK
+    string  name
+    string  short_code
+    enum    type          "BANK | BUREAU | TELCO | UTILITY | MFI | OTHER"
+  }
+  TRAINING_UPLOAD {
+    uuid    id PK
+    uuid    data_source_id FK
+    string  file_name
+    enum    status         "INGESTING | INGESTED | TRANSFORMING | TRANSFORMED | TRAINING | TRAINED | ERROR"
+    jsonb   models_to_train
+    decimal quality_score
+  }
+  FIELD_MAPPING {
+    uuid    id PK
+    uuid    training_upload_id FK
+    string  source_field
+    string  target_feature
+    enum    confidence    "GREEN | YELLOW | RED"
+    enum    source        "TEMPLATE | LLM | MANUAL"
+  }
+  MAPPING_TEMPLATE {
+    uuid    id PK
+    uuid    data_source_id FK
+    int     version
+    jsonb   mappings
+    bool    is_active
+  }
+  MODEL_VERSION {
+    uuid    id PK
+    uuid    training_upload_id FK
+    string  model_type
+    string  version
+    enum    status         "TRAINING | VALIDATION | STAGING | PRODUCTION | DEPRECATED | ARCHIVED"
+    jsonb   metrics
+  }
+
+  %% ── Observability ────────────────────────────────────────────────────────
+  ORGANIZATION ||--o{ API_LOG        : logs
+  WEBHOOK_CONFIG ||--o{ WEBHOOK_DELIVERY : attempts
+
+  API_LOG {
+    uuid    id PK
+    uuid    organization_id FK "null for platform logs"
+    string  method
+    string  path
+    int     status_code
+    int     response_time_ms
+    string  request_id
+  }
+  REQUEST_METRIC {
+    uuid    id PK
+    string  endpoint
+    int     status_code
+    int     response_time_ms
+  }
+  WEBHOOK_CONFIG {
+    uuid    id PK
+    uuid    organization_id FK
+    string  url
+    jsonb   events
+  }
+  WEBHOOK_DELIVERY {
+    uuid    id PK
+    uuid    webhook_config_id FK
+    string  event_type
+    enum    status          "PENDING | DELIVERED | FAILED"
+    int     attempt_count
+  }
+  AUDIT_LOG {
+    uuid    id PK
+    string  actor_type    "admin | org_user | api_key | system"
+    string  action
+    jsonb   changes
+  }
+  ALERT {
+    uuid    id PK
+    string  alert_id
+    string  metric
+    string  dashboard
+    enum    severity       "warning | critical"
+    enum    status         "firing | resolved | ok"
+  }
+  MODEL_METRIC {
+    uuid    id PK
+    string  model_type
+    string  metric_type   "training | drift | live_performance"
+    jsonb   metrics
+  }
+  DECISION_METRIC {
+    uuid    id PK
+    uuid    scoring_result_id FK
+    enum    decision
+    int     credit_score
+    string  risk_tier
+  }

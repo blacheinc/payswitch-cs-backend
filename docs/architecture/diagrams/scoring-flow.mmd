@@ -1,0 +1,37 @@
+%% Single-request scoring flow — POST /v1/score-requests
+
+sequenceDiagram
+  autonumber
+  participant C as Client<br/>(FE / API key)
+  participant API as FastAPI /v1/score-requests
+  participant XDS as XDS Bureau
+  participant HS as Hard-stop rules
+  participant DE as DE Inference Function
+  participant DB as Postgres
+  participant SB as Service Bus<br/>(scoring.complete)
+  participant SUB as Subscriber<br/>(handle_scoring_complete)
+  participant WH as Webhook delivery
+
+  C->>API: POST /v1/score-requests
+  API->>DB: insert ScoreRequest (status=PROCESSING)
+  API->>XDS: login + consumer_match + full credit report
+  alt bureau HIT
+    XDS-->>API: personal details + credit summary + accounts
+  else bureau NO_RECORD
+    XDS-->>API: empty match → identity_confidence=0
+  end
+
+  API->>HS: evaluate_hard_stops(age, confidence, bureau_data)
+  alt hard stop triggered
+    HS-->>API: DECLINE + triggered_rules
+    API->>DB: insert ScoringResult(decision=DECLINE)
+    API-->>C: 202 tracking_id (score already final)
+  else hard stop passed
+    HS-->>API: passed
+    API->>DE: POST /api/transform/inference
+    API-->>C: 202 tracking_id (in-flight)
+    DE-->>SB: publish scoring.complete(tracking_id, result)
+    SB->>SUB: deliver message
+    SUB->>DB: insert ScoringResult + update ScoreRequest.status=COMPLETED
+    SUB->>WH: enqueue webhook (if callback_url / webhook_config)
+  end

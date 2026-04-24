@@ -1,20 +1,24 @@
 #!/bin/sh
+set -eu
 
-# Run database migrations (non-fatal, 15s timeout — app should still start)
+# ── Database migrations ──────────────────────────────────────────────────────
+# Fatal in production so a broken deploy doesn't silently run with stale schema.
+# Non-fatal outside production for faster local iteration.
 echo "Running database migrations..."
-if timeout 15 alembic upgrade head; then
-    echo "Migrations completed successfully."
+if [ "${APP_ENV:-development}" = "production" ]; then
+    alembic upgrade head
+    echo "Migrations completed."
 else
-    echo "WARNING: Migrations failed or timed out. App will start anyway — check DATABASE_URL."
+    if ! timeout 30 alembic upgrade head; then
+        echo "WARNING: migrations failed or timed out — continuing (non-production)."
+    fi
 fi
 
-# Create/Verify default admin (non-fatal, 15s timeout)
-echo "Ensuring default admin user..."
-if timeout 15 python scripts/create_superuser.py; then
-    echo "Superuser check completed."
-else
-    echo "WARNING: Superuser script failed or timed out. Continuing..."
+# ── Bootstrap admin (only runs when BOOTSTRAP_ADMIN_* are set) ───────────────
+echo "Checking for bootstrap admin..."
+if ! python scripts/create_superuser.py; then
+    echo "WARNING: bootstrap admin step failed — continuing."
 fi
 
-# Exec the container's main process (what's set as CMD)
+# ── Launch the app ───────────────────────────────────────────────────────────
 exec "$@"

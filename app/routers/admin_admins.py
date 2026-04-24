@@ -8,10 +8,9 @@ Mirrors the org user CRUD in ``app/routers/org_portal.py`` but:
   be locked out of administration by suspending, demoting, or deleting
   the final SUPER_ADMIN.
 
-The bootstrap scripts (``scripts/create_superuser.py``,
-``scripts/create_admin_user.py``) remain the only way to mint the very
-first admin — these HTTP endpoints all require an authenticated caller
-holding the matching ``admin.admins.*`` permission.
+The bootstrap script (``scripts/create_superuser.py``) remains the only
+way to mint the very first admin — these HTTP endpoints all require an
+authenticated caller holding the matching ``admin.admins.*`` permission.
 """
 from __future__ import annotations
 

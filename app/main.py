@@ -13,6 +13,15 @@ from app.core.exceptions import register_exception_handlers
 from app.core.middleware import RequestIdMiddleware
 
 settings = get_settings()
+
+# Ensure application loggers actually emit — uvicorn only wires up its own
+# named loggers by default, so ``app.*`` logs would otherwise disappear.
+# Idempotent: basicConfig is a no-op if the root logger already has handlers.
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,6 +30,17 @@ async def lifespan(app: FastAPI):
     """Application startup/shutdown lifecycle."""
     # Startup
     logger.info(f"Starting {settings.app_name} ({settings.app_env})")
+    logger.info(
+        "Secret source: %s",
+        f"Azure Key Vault ({settings.azure_keyvault_url})"
+        if settings.use_keyvault
+        else "environment variables (Key Vault disabled)",
+    )
+
+    # Fail fast on missing production settings before touching any external
+    # service — turns a misconfigured container into an unambiguous boot
+    # failure instead of 500s at request time.
+    settings.validate_production()
 
     # Seed permissions and system roles (idempotent)
     from app.db import async_session_factory
@@ -84,11 +104,6 @@ async def lifespan(app: FastAPI):
 
     event_publisher = get_event_publisher()
     await event_publisher.close()
-
-    from app.db.cosmos import get_cosmos_client
-
-    cosmos = get_cosmos_client()
-    await cosmos.close()
 
     redis_cache = get_redis_cache()
     await redis_cache.close()

@@ -329,5 +329,5 @@ export interface UpdateAdminRequest {
 
 ## Bootstrap & migration
 
-- The very first platform admin is still minted by the CLI scripts `scripts/create_superuser.py` or `scripts/create_admin_user.py`. These scripts create an ACTIVE admin; the next startup's seeder migration attaches the SUPER_ADMIN RBAC role automatically (idempotent).
+- The very first platform admin is minted by `scripts/create_superuser.py`, which reads `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` from the environment. The entrypoint runs this on every container boot (idempotent — skips when the email already exists). The next startup's seeder migration attaches the SUPER_ADMIN RBAC role automatically.
 - On first deploy after this release, every existing admin is auto-assigned the SUPER_ADMIN role by the seeder — no action needed. Promote / demote them afterwards via `PATCH /admin/admins/{id}`.

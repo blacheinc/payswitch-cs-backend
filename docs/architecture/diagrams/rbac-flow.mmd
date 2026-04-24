@@ -1,0 +1,37 @@
+%% Authenticated request → permission resolution
+
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant API as FastAPI endpoint<br/>(require_permission("<code>"))
+  participant AUTH as get_auth_context
+  participant RL as check_rate_limit
+  participant PS as load_user_permissions
+  participant DB as Postgres
+
+  Note over C,API: Login happens once<br/>POST /auth/login → JWT (HS256)
+
+  C->>API: HTTP request<br/>Authorization: Bearer <jwt OR api-key>
+  API->>AUTH: resolve bearer token
+  AUTH->>DB: lookup user / api_key row
+  AUTH-->>API: AuthContext {user_id, user_type, org_id, api_key?}
+
+  API->>RL: check_rate_limit(auth)
+  RL->>DB: Redis incr by org
+  RL-->>API: rate-limit headers
+
+  API->>PS: load_user_permissions(db, auth)
+  alt user_type=admin with SUPER_ADMIN
+    PS-->>API: {"*"} (wildcard shortcut)
+  else user_type=org_user with ADMIN system role
+    PS-->>API: ALL_ORG_PERMISSION_CODES (27 codes)
+  else other (custom role / non-system)
+    PS->>DB: SELECT codes via RolePermission
+    PS-->>API: {codes,...}
+  end
+
+  alt code in permissions OR "*" in permissions
+    API-->>C: 200 (handler runs)
+  else missing
+    API-->>C: 403 AUTHORIZATION_ERROR<br/>"Permission required: <code>"
+  end
