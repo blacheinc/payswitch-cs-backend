@@ -381,3 +381,90 @@ class OverrideDecisionResponse(BaseModel):
     previous_decision: str
     new_decision: str
     overridden_by: str | None = None
+
+
+# ── Dashboard stats (GET /v1/score-requests/stats) ────────────────────────────
+
+
+class ScoreDistributionBucket(BaseModel):
+    """One row of the FICO-style score histogram."""
+
+    range: str
+    count: int
+
+
+class StatsDecisionCounts(BaseModel):
+    """Decision mix for the current window.
+
+    Keys are the authoritative ``ScoringDecision`` enum values. ``ERROR``
+    covers pipeline failures and is rendered as "Could not score" on the FE.
+    """
+
+    APPROVE: int = 0
+    CONDITIONAL_APPROVE: int = 0
+    DECLINE: int = 0
+    REFER: int = 0
+    ERROR: int = 0
+    FRAUD_HOLD: int = 0
+
+
+class StatsCurrent(BaseModel):
+    """Aggregates over the current window."""
+
+    total_requests: int
+    decided: int
+    avg_credit_score: int | None = None
+    median_credit_score: int | None = None
+    approval_rate_pct: float
+    decision_counts: StatsDecisionCounts
+    score_distribution: list[ScoreDistributionBucket]
+
+
+class StatsPrevious(BaseModel):
+    """Aggregates over the immediately-prior window of the same length.
+
+    Empty when the org has no history in that range — the FE uses ``null``
+    trend fields as a signal to suppress trend-pill rendering.
+    """
+
+    total_requests: int
+    decided: int
+    avg_credit_score: int | None = None
+    approval_rate_pct: float
+
+
+class StatsTrend(BaseModel):
+    """Pre-computed deltas.
+
+    Every field is ``None`` when the previous window had no activity —
+    deltas against an empty baseline are misleading and the FE hides the
+    pill entirely rather than showing a bogus "↑ 0%".
+    """
+
+    total_delta_pct: float | None = None
+    approval_delta_pp: float | None = None
+    score_delta: int | None = None
+
+
+class StatsNeedsAttention(BaseModel):
+    """Counts powering the action-queue card.
+
+    ``pending_or_processing`` is an instantaneous count (not period-scoped)
+    because the card's job is to surface in-flight work right now.
+    ``referred`` and ``failed`` are scoped to the current window.
+    """
+
+    referred: int = 0
+    pending_or_processing: int = 0
+    failed: int = 0
+
+
+class ScoreRequestStatsResponse(BaseModel):
+    """Response body for ``GET /v1/score-requests/stats``."""
+
+    period: str
+    generated_at: datetime
+    current: StatsCurrent
+    previous: StatsPrevious
+    trend: StatsTrend
+    needs_attention: StatsNeedsAttention

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -44,10 +45,37 @@ async def model_ops_dashboard(
     # Get champion data from blob
     champions = []
     try:
+        from sqlalchemy import select
+
+        from app.models.model_version import ModelVersion
         from app.storage.champion_blob import read_champion_metadata
 
         blob_data = read_champion_metadata()
         if blob_data and "models" in blob_data:
+            # Build a (model_type, version) → promoted_at lookup up front so
+            # we don't fire one query per champion. The ML team's blob
+            # doesn't include a promoted_at timestamp today, but the
+            # ModelVersion table does — the FE's overview dashboard wants
+            # it to distinguish "deployed" from "promoted".
+            type_versions = [
+                (m.get("model_type", ""), str(m.get("version", "")))
+                for m in blob_data["models"]
+            ]
+            promoted_lookup: dict[tuple[str, str], datetime] = {}
+            if type_versions:
+                rows = (
+                    await db.execute(
+                        select(
+                            ModelVersion.model_type,
+                            ModelVersion.version,
+                            ModelVersion.promoted_at,
+                        )
+                        .where(ModelVersion.promoted_at.is_not(None))
+                    )
+                ).all()
+                for mt, ver, promoted in rows:
+                    promoted_lookup[(mt, str(ver))] = promoted
+
             for model in blob_data["models"]:
                 mt = model.get("model_type", "")
                 if model_type and mt != model_type:
@@ -66,12 +94,19 @@ async def model_ops_dashboard(
                     auc_change_pct = 0.0
                     auc_alert = False
 
+                version = str(model.get("version", ""))
+                promoted_at = promoted_lookup.get((mt, version))
+
                 champions.append({
                     "model_type": mt,
                     "registry_name": model.get("registry_name", ""),
-                    "version": model.get("version", ""),
+                    "version": version,
                     "status": model.get("status", ""),
                     "created_at": model.get("created_at"),
+                    "promoted_at": (
+                        promoted_at.isoformat().replace("+00:00", "Z")
+                        if promoted_at else None
+                    ),
                     "current_metrics": current_metrics,
                     "live_auc": live_auc,
                     "auc_change_pct": auc_change_pct,

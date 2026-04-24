@@ -15,8 +15,10 @@ import logging
 import uuid
 from typing import Annotated, Any
 
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -34,7 +36,7 @@ from app.models.score_request import (
     ScoreRequest,
     ScoreRequestStatus,
 )
-from app.models.scoring_result import ScoringResult
+from app.models.scoring_result import ScoringDecision, ScoringResult
 from app.schemas.score_request import (
     ApplicantSummary,
     CreateScoreRequestInput,
@@ -46,9 +48,16 @@ from app.schemas.score_request import (
     PerformanceResponse,
     RecordOutcomeRequest,
     RecordPerformanceRequest,
+    ScoreDistributionBucket,
     ScoreRequestResponse,
+    ScoreRequestStatsResponse,
     ScoreRequestSummary,
     ScoringResultResponse,
+    StatsCurrent,
+    StatsDecisionCounts,
+    StatsNeedsAttention,
+    StatsPrevious,
+    StatsTrend,
 )
 from app.services.hard_stops import evaluate_hard_stops
 from app.storage.cache import get_redis_cache
@@ -761,6 +770,34 @@ async def create_score_request(
     return response
 
 
+# ── Dashboard stats ──────────────────────────────────────────────────────────
+
+
+@router.get("/stats", response_model=ScoreRequestStatsResponse)
+async def get_score_request_stats(
+    auth: Annotated[AuthContext, Depends(require_permission("score_requests.list"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    period: str = Query(
+        "7d",
+        pattern=r"^(today|7d|30d|90d)$",
+        description="Window anchored at 'now'. 'today' is from start-of-day UTC.",
+    ),
+) -> ScoreRequestStatsResponse:
+    """Aggregated dashboard stats for the authenticated organisation.
+
+    Returns everything the org-side overview needs:
+
+    * ``current``  — totals, decision mix, score distribution for the window.
+    * ``previous`` — same-length window immediately prior, for trend.
+    * ``trend``    — pre-computed deltas (``None`` when previous is empty).
+    * ``needs_attention`` — referral / in-flight / failed counts.
+
+    Aggregation happens server-side in two ``GROUP BY`` queries so the FE
+    doesn't need to fetch thousands of rows and misreport at scale.
+    """
+    return await _compute_score_request_stats(db, auth.organization_id, period)
+
+
 @router.get("/{request_id}", response_model=ScoreRequestResponse)
 async def get_score_request(
     request_id: str,
@@ -950,9 +987,30 @@ async def list_score_requests(
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    status_filter: str | None = Query(None, alias="status"),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description="pending | processing | completed | failed",
+    ),
+    decision: list[str] | None = Query(
+        None,
+        description=(
+            "Filter by scoring decision. Repeat the query param to OR "
+            "multiple values, e.g. ?decision=REFER&decision=DECLINE. "
+            "Allowed: APPROVE, CONDITIONAL_APPROVE, DECLINE, REFER, "
+            "FRAUD_HOLD, ERROR."
+        ),
+    ),
 ) -> PaginatedResponse[ScoreRequestSummary]:
-    """List all score requests for the authenticated organization."""
+    """List all score requests for the authenticated organization.
+
+    Supports two filter axes:
+
+    * ``status`` — ScoreRequest lifecycle state (pre-scoring).
+    * ``decision`` — ScoringResult outcome (post-scoring). Joins to the
+      ``scoring_results`` table, so requests that never produced a result
+      are excluded when this filter is active.
+    """
     query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
         ScoreRequest.organization_id == auth.organization_id
     )
@@ -961,9 +1019,42 @@ async def list_score_requests(
     )
 
     if status_filter:
-        query = query.where(ScoreRequest.status == ScoreRequestStatus(status_filter))
-        count_query = count_query.where(
-            ScoreRequest.status == ScoreRequestStatus(status_filter)
+        try:
+            status_enum = ScoreRequestStatus(status_filter)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Invalid status '{status_filter}'. "
+                    f"Allowed: {', '.join(s.value for s in ScoreRequestStatus)}"
+                ),
+            )
+        query = query.where(ScoreRequest.status == status_enum)
+        count_query = count_query.where(ScoreRequest.status == status_enum)
+
+    if decision:
+        # Support comma-separated single param (?decision=REFER,DECLINE)
+        # in addition to the FE's preferred repeated-param form.
+        flat: list[str] = []
+        for d in decision:
+            flat.extend(part.strip() for part in d.split(",") if part.strip())
+        try:
+            decision_enums = [ScoringDecision(d) for d in flat]
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Invalid decision filter: {exc}. "
+                    f"Allowed: {', '.join(d.value for d in ScoringDecision)}"
+                ),
+            )
+        query = (
+            query.join(ScoringResult, ScoringResult.score_request_id == ScoreRequest.id)
+            .where(ScoringResult.decision.in_(decision_enums))
+        )
+        count_query = (
+            count_query.join(ScoringResult, ScoringResult.score_request_id == ScoreRequest.id)
+            .where(ScoringResult.decision.in_(decision_enums))
         )
 
     total = (await db.execute(count_query)).scalar_one()
@@ -1065,3 +1156,259 @@ async def record_performance(
     db.add(perf)
 
     return PerformanceResponse(request_id=request_id)
+
+
+# ── Stats helpers ─────────────────────────────────────────────────────────────
+
+
+# FICO-style bands kept verbatim so the FE doesn't have to map labels.
+_SCORE_BUCKETS: tuple[tuple[str, int, int], ...] = (
+    ("300-499", 300, 499),
+    ("500-579", 500, 579),
+    ("580-669", 580, 669),
+    ("670-739", 670, 739),
+    ("740-850", 740, 850),
+)
+
+# Decisions counted towards the "approved" rate in approval_rate_pct.
+_APPROVED_DECISIONS = (ScoringDecision.APPROVE, ScoringDecision.CONDITIONAL_APPROVE)
+
+
+def _period_bounds(period: str, *, now: datetime) -> tuple[datetime, datetime, datetime]:
+    """Return (current_start, current_end, previous_start) for the given period.
+
+    The current window is ``[current_start, current_end)`` — end is the
+    caller-supplied ``now`` so we don't drift within the same request. The
+    previous window is the same-length slice immediately before
+    ``current_start`` (its end == current_start).
+    """
+    current_end = now
+    if period == "today":
+        current_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        days = {"7d": 7, "30d": 30, "90d": 90}[period]
+        current_start = now - timedelta(days=days)
+
+    window = current_end - current_start
+    previous_start = current_start - window
+    return current_start, current_end, previous_start
+
+
+async def _aggregate_window(
+    db: AsyncSession,
+    *,
+    organization_id,
+    start: datetime,
+    end: datetime,
+) -> dict:
+    """Run the SQL aggregates for one window.
+
+    Returns a dict with keys: ``total``, ``decided``, ``avg_score``,
+    ``median_score``, ``approved``, ``by_decision`` (mapping enum → count),
+    ``by_bucket`` (list of (range, count) matching _SCORE_BUCKETS order).
+    ``median_score`` is only computed for the "current" window — the stats
+    schema doesn't expose it for ``previous``.
+    """
+    # Aggregates over ScoreRequest joined to ScoringResult. Requests without
+    # a result (still in flight, or failed before scoring) count towards
+    # ``total`` but not ``decided``.
+    base_filter = [
+        ScoreRequest.organization_id == organization_id,
+        ScoreRequest.created_at >= start,
+        ScoreRequest.created_at < end,
+    ]
+
+    # total_requests
+    total = (
+        await db.execute(
+            select(func.count(ScoreRequest.id)).where(*base_filter)
+        )
+    ).scalar_one()
+
+    # decided + decision_counts — one GROUP BY over the join.
+    rows = (
+        await db.execute(
+            select(
+                ScoringResult.decision,
+                func.count(ScoringResult.id),
+            )
+            .join(ScoreRequest, ScoreRequest.id == ScoringResult.score_request_id)
+            .where(*base_filter)
+            .group_by(ScoringResult.decision)
+        )
+    ).all()
+    by_decision: dict[ScoringDecision, int] = {d: c for d, c in rows}
+    decided = sum(by_decision.values())
+    approved = sum(by_decision.get(d, 0) for d in _APPROVED_DECISIONS)
+
+    # avg + median — only consider rows that actually have a score_value.
+    score_expr = ScoreRequest.score_value
+    avg_row = (
+        await db.execute(
+            select(
+                func.avg(score_expr),
+                func.percentile_cont(0.5).within_group(score_expr.asc()),
+            )
+            .where(*base_filter, score_expr.is_not(None))
+        )
+    ).first()
+    avg_score = int(avg_row[0]) if avg_row and avg_row[0] is not None else None
+    median_score = int(avg_row[1]) if avg_row and avg_row[1] is not None else None
+
+    # Score distribution — one GROUP BY using a CASE expression.
+    #
+    # Using CASE keeps it to a single round-trip and gives us explicit
+    # inclusive-on-both-ends bucket boundaries matching _SCORE_BUCKETS.
+    bucket_case = case(
+        *[
+            (
+                score_expr.between(lo, hi),
+                literal(label),
+            )
+            for label, lo, hi in _SCORE_BUCKETS
+        ],
+        else_=None,
+    ).label("bucket")
+
+    hist_rows = (
+        await db.execute(
+            select(bucket_case, func.count())
+            .where(*base_filter, score_expr.is_not(None))
+            .group_by(bucket_case)
+        )
+    ).all()
+    hist: dict[str, int] = {b: c for b, c in hist_rows if b is not None}
+    by_bucket = [(label, hist.get(label, 0)) for label, _, _ in _SCORE_BUCKETS]
+
+    return {
+        "total": total,
+        "decided": decided,
+        "avg_score": avg_score,
+        "median_score": median_score,
+        "approved": approved,
+        "by_decision": by_decision,
+        "by_bucket": by_bucket,
+    }
+
+
+async def _compute_score_request_stats(
+    db: AsyncSession,
+    organization_id,
+    period: str,
+) -> ScoreRequestStatsResponse:
+    now = utcnow()
+    current_start, current_end, previous_start = _period_bounds(period, now=now)
+
+    current_agg = await _aggregate_window(
+        db, organization_id=organization_id,
+        start=current_start, end=current_end,
+    )
+    previous_agg = await _aggregate_window(
+        db, organization_id=organization_id,
+        start=previous_start, end=current_start,
+    )
+
+    # ── decision counts ───────────────────────────────────────────────────
+    decision_counts = StatsDecisionCounts(
+        APPROVE=current_agg["by_decision"].get(ScoringDecision.APPROVE, 0),
+        CONDITIONAL_APPROVE=current_agg["by_decision"].get(
+            ScoringDecision.CONDITIONAL_APPROVE, 0
+        ),
+        DECLINE=current_agg["by_decision"].get(ScoringDecision.DECLINE, 0),
+        REFER=current_agg["by_decision"].get(ScoringDecision.REFER, 0),
+        ERROR=current_agg["by_decision"].get(ScoringDecision.ERROR, 0),
+        FRAUD_HOLD=current_agg["by_decision"].get(ScoringDecision.FRAUD_HOLD, 0),
+    )
+
+    # ── approval rates ────────────────────────────────────────────────────
+    def _pct(approved: int, decided: int) -> float:
+        return round(approved * 100 / decided, 1) if decided else 0.0
+
+    current_approval_pct = _pct(current_agg["approved"], current_agg["decided"])
+    previous_approval_pct = _pct(previous_agg["approved"], previous_agg["decided"])
+
+    # ── trend deltas ──────────────────────────────────────────────────────
+    # When the previous window has zero activity we emit None so the FE
+    # hides the trend pill rather than rendering a meaningless "+0% / ∞".
+    if previous_agg["total"] == 0:
+        total_delta_pct: float | None = None
+    else:
+        total_delta_pct = round(
+            (current_agg["total"] - previous_agg["total"])
+            * 100 / previous_agg["total"],
+            1,
+        )
+
+    approval_delta_pp: float | None
+    score_delta: int | None
+    if previous_agg["decided"] == 0:
+        approval_delta_pp = None
+    else:
+        approval_delta_pp = round(current_approval_pct - previous_approval_pct, 1)
+
+    if previous_agg["avg_score"] is None or current_agg["avg_score"] is None:
+        score_delta = None
+    else:
+        score_delta = current_agg["avg_score"] - previous_agg["avg_score"]
+
+    # ── needs attention (current window for referred/failed,
+    #    instantaneous for in-flight) ────────────────────────────────────
+    referred = current_agg["by_decision"].get(ScoringDecision.REFER, 0)
+
+    in_flight = (
+        await db.execute(
+            select(func.count(ScoreRequest.id))
+            .where(
+                ScoreRequest.organization_id == organization_id,
+                ScoreRequest.status.in_([
+                    ScoreRequestStatus.PENDING,
+                    ScoreRequestStatus.PROCESSING,
+                ]),
+            )
+        )
+    ).scalar_one()
+
+    failed = (
+        await db.execute(
+            select(func.count(ScoreRequest.id))
+            .where(
+                ScoreRequest.organization_id == organization_id,
+                ScoreRequest.status == ScoreRequestStatus.FAILED,
+                ScoreRequest.created_at >= current_start,
+                ScoreRequest.created_at < current_end,
+            )
+        )
+    ).scalar_one()
+
+    return ScoreRequestStatsResponse(
+        period=period,
+        generated_at=now,
+        current=StatsCurrent(
+            total_requests=current_agg["total"],
+            decided=current_agg["decided"],
+            avg_credit_score=current_agg["avg_score"],
+            median_credit_score=current_agg["median_score"],
+            approval_rate_pct=current_approval_pct,
+            decision_counts=decision_counts,
+            score_distribution=[
+                ScoreDistributionBucket(range=label, count=count)
+                for label, count in current_agg["by_bucket"]
+            ],
+        ),
+        previous=StatsPrevious(
+            total_requests=previous_agg["total"],
+            decided=previous_agg["decided"],
+            avg_credit_score=previous_agg["avg_score"],
+            approval_rate_pct=previous_approval_pct,
+        ),
+        trend=StatsTrend(
+            total_delta_pct=total_delta_pct,
+            approval_delta_pp=approval_delta_pp,
+            score_delta=score_delta,
+        ),
+        needs_attention=StatsNeedsAttention(
+            referred=referred,
+            pending_or_processing=in_flight,
+            failed=failed,
+        ),
+    )
