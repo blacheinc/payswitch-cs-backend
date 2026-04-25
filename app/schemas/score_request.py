@@ -468,3 +468,32 @@ class ScoreRequestStatsResponse(BaseModel):
     previous: StatsPrevious
     trend: StatsTrend
     needs_attention: StatsNeedsAttention
+
+
+# ── Admin platform stats (GET /admin/score-requests/stats) ────────────────────
+
+
+class OrgBreakdownEntry(BaseModel):
+    """One row of the platform-wide ``by_org`` breakdown.
+
+    Returned only when an admin omits ``organization_id`` — gives the
+    platform overview a tile-friendly per-tenant slice.
+    """
+
+    organization_id: UUID
+    name: str
+    short_name: str | None = None
+    total_requests: int
+    decided: int
+    approval_rate_pct: float
+
+
+class PlatformScoreRequestStatsResponse(ScoreRequestStatsResponse):
+    """Same shape as the org stats response plus a per-org breakdown.
+
+    Inherits the platform-wide aggregates (everything across all orgs in
+    the window) and adds ``by_org`` so the admin overview can render a
+    sortable per-tenant table.
+    """
+
+    by_org: list[OrgBreakdownEntry]

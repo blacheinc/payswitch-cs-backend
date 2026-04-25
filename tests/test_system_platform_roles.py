@@ -177,3 +177,31 @@ def test_administration_permissions_restricted_to_super_admin(admin_only_code):
     assert holders == {"SUPER_ADMIN"}, (
         f"{admin_only_code!r} leaked to {holders - {'SUPER_ADMIN'}}"
     )
+
+
+@pytest.mark.parametrize(
+    "perm_code,expected_holders",
+    [
+        # Cross-org read access goes to SUPER_ADMIN, RISK_ANALYST (portfolio
+        # drill-down), COMPLIANCE_OFFICER (audits) — but NOT MODEL_OPS
+        # (aggregate view only) or INFRASTRUCTURE_ENGINEER (no business data).
+        (
+            "admin.score_requests.read",
+            {"SUPER_ADMIN", "RISK_ANALYST", "COMPLIANCE_OFFICER"},
+        ),
+        (
+            "admin.batch_scoring.read",
+            {"SUPER_ADMIN", "RISK_ANALYST", "COMPLIANCE_OFFICER"},
+        ),
+    ],
+)
+def test_cross_org_read_permissions_match_personas(perm_code, expected_holders):
+    """Verify cross-org read perms only land on the personas that need them."""
+    actual = {
+        role_name
+        for role_name, codes in SYSTEM_PLATFORM_ROLES.items()
+        if perm_code in codes
+    }
+    assert actual == expected_holders, (
+        f"{perm_code!r} → expected {expected_holders}, got {actual}"
+    )

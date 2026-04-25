@@ -26,7 +26,8 @@ from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import PaginatedResponse
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import AuthContext, require_permission
+from app.dependencies import AuthContext, require_any_permission, require_permission
+from app.services.cross_org_access import resolve_org_filter
 from app.models.score_request import (
     DecisionType,
     LoanPerformance,
@@ -775,45 +776,84 @@ async def create_score_request(
 
 @router.get("/stats", response_model=ScoreRequestStatsResponse)
 async def get_score_request_stats(
-    auth: Annotated[AuthContext, Depends(require_permission("score_requests.list"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("score_requests.list", "admin.score_requests.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     period: str = Query(
         "7d",
         pattern=r"^(today|7d|30d|90d)$",
         description="Window anchored at 'now'. 'today' is from start-of-day UTC.",
     ),
+    organization_id: str | None = Query(
+        None,
+        description=(
+            "Admin-only: scope stats to a specific organisation. Org users "
+            "and API keys must omit this param (or pass their own org id) "
+            "— anything else is rejected as unauthorised cross-org access."
+        ),
+    ),
 ) -> ScoreRequestStatsResponse:
-    """Aggregated dashboard stats for the authenticated organisation.
+    """Aggregated dashboard stats.
 
-    Returns everything the org-side overview needs:
+    For org callers this is scoped to their own organisation. For platform
+    admins holding ``admin.score_requests.read`` it accepts an optional
+    ``organization_id`` to scope to a specific org; omitting it returns
+    platform-wide stats across every org.
 
-    * ``current``  — totals, decision mix, score distribution for the window.
-    * ``previous`` — same-length window immediately prior, for trend.
-    * ``trend``    — pre-computed deltas (``None`` when previous is empty).
-    * ``needs_attention`` — referral / in-flight / failed counts.
-
-    Aggregation happens server-side in two ``GROUP BY`` queries so the FE
-    doesn't need to fetch thousands of rows and misreport at scale.
+    Returns:
+        * ``current``  — totals, decision mix, score distribution for the window.
+        * ``previous`` — same-length window immediately prior, for trend.
+        * ``trend``    — pre-computed deltas (``None`` when previous is empty).
+        * ``needs_attention`` — referral / in-flight / failed counts.
     """
-    return await _compute_score_request_stats(db, auth.organization_id, period)
+    org_filter = await resolve_org_filter(
+        db, auth,
+        requested_org_id=organization_id,
+        admin_permission="admin.score_requests.read",
+        resource_type="score_requests",
+    )
+    return await _compute_score_request_stats(
+        db, org_filter.organization_id, period
+    )
 
 
 @router.get("/{request_id}", response_model=ScoreRequestResponse)
 async def get_score_request(
     request_id: str,
-    auth: Annotated[AuthContext, Depends(require_permission("score_requests.read"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("score_requests.read", "admin.score_requests.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScoreRequestResponse:
-    """Get the result of a score request by tracking ID."""
-    result = await db.execute(
-        select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
-            ScoreRequest.tracking_id == request_id,
-            ScoreRequest.organization_id == auth.organization_id,
-        )
+    """Get the result of a score request by tracking ID.
+
+    Org callers may only fetch requests belonging to their own org.
+    Platform admins with ``admin.score_requests.read`` may fetch any
+    request regardless of org — those reads are recorded in ``audit_logs``.
+    """
+    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
+        ScoreRequest.tracking_id == request_id,
     )
+    # Restrict by org for non-admin callers; admins (with the perm) see any row.
+    if auth.user_type != "admin":
+        query = query.where(ScoreRequest.organization_id == auth.organization_id)
+
+    result = await db.execute(query)
     score_req = result.scalar_one_or_none()
     if not score_req:
         raise NotFoundError("Score request", request_id)
+
+    # Audit cross-org reads for traceability — admin scoping a known
+    # tracking_id is privileged and should leave a trail.
+    if auth.user_type == "admin":
+        await _audit_admin_score_read(
+            db, auth,
+            organization_id=score_req.organization_id,
+            request_id=request_id,
+        )
 
     applicant, loan = _extract_summaries(score_req.request_payload or {})
 
@@ -834,7 +874,10 @@ async def get_score_request(
 @router.get("/{request_id}/scoring-result", response_model=ScoringResultResponse)
 async def get_scoring_result(
     request_id: str,
-    auth: Annotated[AuthContext, Depends(require_permission("score_requests.read"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("score_requests.read", "admin.score_requests.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ScoringResultResponse:
     """Get the full 4-model scoring result for a score request.
@@ -842,17 +885,26 @@ async def get_scoring_result(
     Returns the rich output from the AI pipeline including credit risk,
     fraud detection, loan amount, and income verification model results,
     along with SHAP contributions and reason codes.
+
+    Same org-scoping rules as :func:`get_score_request` — admins read any
+    org, audit-logged.
     """
-    # Verify the request belongs to this organization
-    sr_result = await db.execute(
-        select(ScoreRequest).where(
-            ScoreRequest.tracking_id == request_id,
-            ScoreRequest.organization_id == auth.organization_id,
+    sr_query = select(ScoreRequest).where(ScoreRequest.tracking_id == request_id)
+    if auth.user_type != "admin":
+        sr_query = sr_query.where(
+            ScoreRequest.organization_id == auth.organization_id
         )
-    )
-    score_req = sr_result.scalar_one_or_none()
+
+    score_req = (await db.execute(sr_query)).scalar_one_or_none()
     if not score_req:
         raise NotFoundError("Score request", request_id)
+
+    if auth.user_type == "admin":
+        await _audit_admin_score_read(
+            db, auth,
+            organization_id=score_req.organization_id,
+            request_id=request_id,
+        )
 
     # Look up the scoring result
     result = await db.execute(
@@ -983,7 +1035,10 @@ async def override_decision(
 
 @router.get("", response_model=PaginatedResponse[ScoreRequestSummary])
 async def list_score_requests(
-    auth: Annotated[AuthContext, Depends(require_permission("score_requests.list"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("score_requests.list", "admin.score_requests.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -1001,22 +1056,38 @@ async def list_score_requests(
             "FRAUD_HOLD, ERROR."
         ),
     ),
+    organization_id: str | None = Query(
+        None,
+        description=(
+            "Admin-only: scope to a specific organisation. Org users and "
+            "API keys must omit or pass their own org id; cross-org reads "
+            "by non-admins are rejected as unauthorised."
+        ),
+    ),
 ) -> PaginatedResponse[ScoreRequestSummary]:
-    """List all score requests for the authenticated organization.
+    """List score requests with optional cross-org admin scoping.
 
-    Supports two filter axes:
-
-    * ``status`` — ScoreRequest lifecycle state (pre-scoring).
-    * ``decision`` — ScoringResult outcome (post-scoring). Joins to the
-      ``scoring_results`` table, so requests that never produced a result
-      are excluded when this filter is active.
+    Filters:
+        * ``status`` — ScoreRequest lifecycle state (pre-scoring).
+        * ``decision`` — ScoringResult outcome (post-scoring). Joins to
+          ``scoring_results``; requests without a result are excluded
+          when this filter is active.
+        * ``organization_id`` — admin-only narrow / cross-org wide.
     """
-    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
-        ScoreRequest.organization_id == auth.organization_id
+    org_filter = await resolve_org_filter(
+        db, auth,
+        requested_org_id=organization_id,
+        admin_permission="admin.score_requests.read",
+        resource_type="score_requests",
     )
-    count_query = select(func.count(ScoreRequest.id)).where(
-        ScoreRequest.organization_id == auth.organization_id
-    )
+
+    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result))
+    count_query = select(func.count(ScoreRequest.id))
+    if org_filter.organization_id is not None:
+        query = query.where(ScoreRequest.organization_id == org_filter.organization_id)
+        count_query = count_query.where(
+            ScoreRequest.organization_id == org_filter.organization_id
+        )
 
     if status_filter:
         try:
@@ -1158,6 +1229,36 @@ async def record_performance(
     return PerformanceResponse(request_id=request_id)
 
 
+# ── Audit helper for admin reads of org-owned score data ─────────────────────
+
+
+async def _audit_admin_score_read(
+    db: AsyncSession,
+    auth: AuthContext,
+    *,
+    organization_id,
+    request_id: str,
+) -> None:
+    """Record that a platform admin read a specific score request.
+
+    Stats / list endpoints log via ``cross_org_access.resolve_org_filter``;
+    detail handlers go through tracking-id lookup so they audit here
+    instead.  Same actor / resource conventions as the shared helper.
+    """
+    from app.models.audit import AuditLog
+
+    db.add(AuditLog(
+        actor_type="admin",
+        actor_id=str(auth.user_id) if auth.user_id else None,
+        actor_email=auth.user_email,
+        organization_id=str(organization_id) if organization_id else None,
+        action="score_requests.read_cross_org",
+        resource_type="score_requests",
+        resource_id=request_id,
+        description=f"Admin viewed score request {request_id}",
+    ))
+
+
 # ── Stats helpers ─────────────────────────────────────────────────────────────
 
 
@@ -1203,20 +1304,22 @@ async def _aggregate_window(
 ) -> dict:
     """Run the SQL aggregates for one window.
 
+    Pass ``organization_id=None`` to aggregate across the whole platform
+    (admin cross-org case); otherwise the query is scoped to that org.
+
     Returns a dict with keys: ``total``, ``decided``, ``avg_score``,
     ``median_score``, ``approved``, ``by_decision`` (mapping enum → count),
     ``by_bucket`` (list of (range, count) matching _SCORE_BUCKETS order).
-    ``median_score`` is only computed for the "current" window — the stats
-    schema doesn't expose it for ``previous``.
     """
     # Aggregates over ScoreRequest joined to ScoringResult. Requests without
     # a result (still in flight, or failed before scoring) count towards
     # ``total`` but not ``decided``.
     base_filter = [
-        ScoreRequest.organization_id == organization_id,
         ScoreRequest.created_at >= start,
         ScoreRequest.created_at < end,
     ]
+    if organization_id is not None:
+        base_filter.append(ScoreRequest.organization_id == organization_id)
 
     # total_requests
     total = (
@@ -1355,29 +1458,26 @@ async def _compute_score_request_stats(
     #    instantaneous for in-flight) ────────────────────────────────────
     referred = current_agg["by_decision"].get(ScoringDecision.REFER, 0)
 
-    in_flight = (
-        await db.execute(
-            select(func.count(ScoreRequest.id))
-            .where(
-                ScoreRequest.organization_id == organization_id,
-                ScoreRequest.status.in_([
-                    ScoreRequestStatus.PENDING,
-                    ScoreRequestStatus.PROCESSING,
-                ]),
-            )
-        )
-    ).scalar_one()
+    in_flight_filter = [
+        ScoreRequest.status.in_([
+            ScoreRequestStatus.PENDING,
+            ScoreRequestStatus.PROCESSING,
+        ]),
+    ]
+    failed_filter = [
+        ScoreRequest.status == ScoreRequestStatus.FAILED,
+        ScoreRequest.created_at >= current_start,
+        ScoreRequest.created_at < current_end,
+    ]
+    if organization_id is not None:
+        in_flight_filter.append(ScoreRequest.organization_id == organization_id)
+        failed_filter.append(ScoreRequest.organization_id == organization_id)
 
+    in_flight = (
+        await db.execute(select(func.count(ScoreRequest.id)).where(*in_flight_filter))
+    ).scalar_one()
     failed = (
-        await db.execute(
-            select(func.count(ScoreRequest.id))
-            .where(
-                ScoreRequest.organization_id == organization_id,
-                ScoreRequest.status == ScoreRequestStatus.FAILED,
-                ScoreRequest.created_at >= current_start,
-                ScoreRequest.created_at < current_end,
-            )
-        )
+        await db.execute(select(func.count(ScoreRequest.id)).where(*failed_filter))
     ).scalar_one()
 
     return ScoreRequestStatsResponse(

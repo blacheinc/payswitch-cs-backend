@@ -27,7 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import AuthContext, require_permission
+from app.dependencies import AuthContext, require_any_permission, require_permission
+from app.services.cross_org_access import resolve_org_filter
 from app.models.batch_job_item import BatchJobItem, BatchJobItemStatus
 from app.models.bulk_job import BulkJobStatus, BulkScoringJob
 from app.schemas.batch_scoring import BatchScoreRequest
@@ -124,17 +125,38 @@ async def submit_batch_job(
 
 @router.get("")
 async def list_batch_jobs(
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.list"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("batch_scoring.list", "admin.batch_scoring.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     status: str | None = Query(None, description="Filter by job status"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    organization_id: str | None = Query(
+        None,
+        description=(
+            "Admin-only: scope to a specific organisation. Org users and "
+            "API keys must omit or pass their own org id."
+        ),
+    ),
 ) -> JSONResponse:
-    """List all batch jobs for the authenticated organisation."""
-    q = select(BulkScoringJob).where(
-        BulkScoringJob.organization_id == auth.organization_id,
-        BulkScoringJob.job_id.is_not(None),
+    """List batch jobs.
+
+    Org callers see their own jobs only. Platform admins with
+    ``admin.batch_scoring.read`` may pass an ``organization_id`` to scope
+    to a specific org, or omit it for cross-org platform visibility.
+    """
+    org_filter = await resolve_org_filter(
+        db, auth,
+        requested_org_id=organization_id,
+        admin_permission="admin.batch_scoring.read",
+        resource_type="batch_scoring",
     )
+
+    q = select(BulkScoringJob).where(BulkScoringJob.job_id.is_not(None))
+    if org_filter.organization_id is not None:
+        q = q.where(BulkScoringJob.organization_id == org_filter.organization_id)
     if status:
         try:
             q = q.where(BulkScoringJob.status == BulkJobStatus(status))
@@ -170,11 +192,18 @@ async def list_batch_jobs(
 @router.get("/{job_id}")
 async def get_batch_job_status(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.read"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("batch_scoring.read", "admin.batch_scoring.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> JSONResponse:
-    """Return status and per-item progress counts for a batch job."""
-    job = await _get_job_or_404(db, job_id, auth.organization_id)
+    """Return status and per-item progress counts for a batch job.
+
+    Org callers see only their own jobs; admins with
+    ``admin.batch_scoring.read`` may inspect any org's job (audit-logged).
+    """
+    job = await _resolve_batch_job_for_caller(db, auth, job_id)
     if job is None:
         return JSONResponse(
             status_code=404,
@@ -234,7 +263,10 @@ async def get_batch_job_status(
 @router.get("/{job_id}/results")
 async def get_batch_results(
     job_id: Annotated[str, Path(description="Batch job ID")],
-    auth: Annotated[AuthContext, Depends(require_permission("batch_scoring.read"))],
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("batch_scoring.read", "admin.batch_scoring.read")),
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
     status: str | None = Query(
         None,
@@ -251,8 +283,11 @@ async def get_batch_results(
 
     Each completed item includes a ``score_request_id`` and ``score_tracking_id``
     the frontend can use to deep-link into the individual scoring result.
+
+    Same org-scoping rules as the status endpoint — admins read any org,
+    audit-logged.
     """
-    job = await _get_job_or_404(db, job_id, auth.organization_id)
+    job = await _resolve_batch_job_for_caller(db, auth, job_id)
     if job is None:
         return JSONResponse(
             status_code=404,
@@ -367,10 +402,48 @@ async def _get_job_or_404(
     job_id: str,
     organization_id,
 ) -> BulkScoringJob | None:
+    """Strict org-scoped job lookup, used by mutating endpoints (cancel)."""
     q = select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
     if organization_id:
         q = q.where(BulkScoringJob.organization_id == organization_id)
     return (await db.execute(q)).scalar_one_or_none()
+
+
+async def _resolve_batch_job_for_caller(
+    db: AsyncSession,
+    auth: AuthContext,
+    job_id: str,
+) -> BulkScoringJob | None:
+    """Look up a batch job honouring cross-org admin reads.
+
+    Org callers may only fetch jobs that belong to their own
+    ``organization_id``.  Platform admins with the
+    ``admin.batch_scoring.read`` permission may fetch any job — those
+    accesses are recorded in ``audit_logs``.
+    """
+    q = select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
+    if auth.user_type != "admin":
+        q = q.where(BulkScoringJob.organization_id == auth.organization_id)
+
+    job = (await db.execute(q)).scalar_one_or_none()
+    if job is None:
+        return None
+
+    if auth.user_type == "admin":
+        from app.models.audit import AuditLog
+
+        db.add(AuditLog(
+            actor_type="admin",
+            actor_id=str(auth.user_id) if auth.user_id else None,
+            actor_email=auth.user_email,
+            organization_id=str(job.organization_id) if job.organization_id else None,
+            action="batch_scoring.read_cross_org",
+            resource_type="batch_scoring",
+            resource_id=job_id,
+            description=f"Admin viewed batch job {job_id}",
+        ))
+
+    return job
 
 
 def _map_status(status: BulkJobStatus) -> str:

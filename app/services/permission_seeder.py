@@ -37,6 +37,9 @@ PERMISSIONS: list[dict] = [
     {"code": "admin.roles.read",                  "name": "View Platform Roles",        "group_name": "Role Management", "description": "View platform roles and their permissions",           "scope": "platform"},
     {"code": "admin.roles.manage",                "name": "Manage Platform Roles",      "group_name": "Role Management", "description": "Create, update, and delete platform roles",           "scope": "platform"},
     {"code": "admin.roles.assign",                "name": "Assign Platform Roles",      "group_name": "Role Management", "description": "Assign and unassign roles to platform users",         "scope": "platform"},
+    # Cross-org read access (admin observability into client orgs' scoring activity)
+    {"code": "admin.score_requests.read",         "name": "View Org Score Requests",    "group_name": "Cross-Org Read",  "description": "View any organisation's score requests + dashboard stats", "scope": "platform"},
+    {"code": "admin.batch_scoring.read",          "name": "View Org Batch Jobs",        "group_name": "Cross-Org Read",  "description": "View any organisation's batch scoring jobs",          "scope": "platform"},
     # Platform admin user management
     {"code": "admin.admins.invite",               "name": "Invite Platform Admin",      "group_name": "Admin Users",     "description": "Invite new platform administrators",                  "scope": "platform"},
     {"code": "admin.admins.list",                 "name": "List Platform Admins",       "group_name": "Admin Users",     "description": "List platform administrators",                        "scope": "platform"},
@@ -133,13 +136,17 @@ SYSTEM_PLATFORM_ROLES: dict[str, frozenset[str]] = {
     # Risk Dashboard persona — approval rates, score distributions,
     # delinquency trends.  Gets rules.evaluate + models.read (the FE
     # monitoring guide co-locates these with the risk dashboard) and
-    # read-only org context for portfolio segmentation.
+    # read-only org context for portfolio segmentation.  Cross-org
+    # read on score requests + batch jobs lets risk analysts drill
+    # from portfolio aggregates into individual decisions.
     "RISK_ANALYST": frozenset({
         "monitoring.risk",
         "monitoring.alerts",
         "models.read",
         "rules.evaluate",
         "admin.organizations.read",
+        "admin.score_requests.read",
+        "admin.batch_scoring.read",
     }),
 
     # ModelOps Dashboard persona — champion AUC, PSI by feature,
@@ -161,13 +168,16 @@ SYSTEM_PLATFORM_ROLES: dict[str, frozenset[str]] = {
     # Compliance Dashboard persona — fairness metrics, audit log volume,
     # regulation breach alerts, data subject requests.  Read-only access to
     # the risk dashboard (fairness analysis needs approval/decline signals)
-    # and to org context for incident attribution.
+    # and to org context for incident attribution.  Cross-org score
+    # request + batch read so compliance can audit individual decisions.
     "COMPLIANCE_OFFICER": frozenset({
         "monitoring.compliance",
         "monitoring.risk",
         "monitoring.alerts",
         "admin.api_logs.read",
         "admin.organizations.read",
+        "admin.score_requests.read",
+        "admin.batch_scoring.read",
     }),
 
     # Infrastructure Dashboard persona — API latency, error rates, pod

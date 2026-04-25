@@ -22,6 +22,13 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+# Silence the noisy SDKs.  azure.servicebus._pyamqp emits a torrent of
+# link / session / CBS state-transition messages even at INFO that bury
+# our own logs and confuse on-call.  Pin them to WARNING — failures still
+# surface, normal operation is silent.
+for noisy in ("azure", "azure.servicebus", "azure.identity", "uamqp"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -167,6 +174,7 @@ def create_app() -> FastAPI:
     from app.routers.permissions import router as permissions_router
     from app.routers.admin_api_logs import router as admin_api_logs_router
     from app.routers.admin_admins import router as admin_admins_router
+    from app.routers.admin_score_requests import router as admin_score_requests_router
 
     app.include_router(models_router)
     app.include_router(rules_router)
@@ -175,6 +183,7 @@ def create_app() -> FastAPI:
     app.include_router(permissions_router)
     app.include_router(admin_api_logs_router)
     app.include_router(admin_admins_router)
+    app.include_router(admin_score_requests_router)
 
     app.include_router(profile_router)
     app.include_router(users_router)

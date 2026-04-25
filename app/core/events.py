@@ -47,6 +47,30 @@ class InMemoryQueue:
         except asyncio.TimeoutError:
             return None
 
+    async def consume(
+        self,
+        topic_name: str,
+        subscription_name: str | None,
+        handler: "MessageHandler",
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Long-lived consumer loop — kept symmetric with the SB backend
+        so subscribers can use the same call shape regardless of mode.
+        """
+        while True:
+            raw = await self.receive(
+                topic_name, subscription_name=subscription_name, timeout=timeout
+            )
+            if raw is None:
+                continue
+            try:
+                await handler(json.loads(raw))
+            except Exception:
+                logger.exception(
+                    "[InMemoryQueue] handler error on '%s'", topic_name
+                )
+
 
 class ServiceBusPublisher:
     """Azure Service Bus topic publisher and subscription receiver."""
@@ -90,7 +114,13 @@ class ServiceBusPublisher:
         subscription_name: str | None = None,
         timeout: float = 5.0,
     ) -> str | None:
-        """Receive a message from a Service Bus topic subscription."""
+        """One-shot receive — opens, reads one message, closes.
+
+        Kept for ad-hoc callers and tests. Long-running subscribers should
+        use :meth:`consume`, which holds the AMQP link open across polls
+        and avoids the attach/detach storm the one-shot path causes when
+        polled in a loop.
+        """
         if not subscription_name:
             raise ValueError("subscription_name is required for Service Bus topics")
 
@@ -109,6 +139,85 @@ class ServiceBusPublisher:
                 await receiver.complete_message(msg)
                 return body
         return None
+
+    async def consume(
+        self,
+        topic_name: str,
+        subscription_name: str | None,
+        handler: "MessageHandler",
+        *,
+        timeout: float = 5.0,
+    ) -> None:
+        """Hold a single receiver open and dispatch messages to ``handler``.
+
+        Replaces the previous "open / read / close per poll" pattern that
+        produced an attach/detach AMQP cycle every few seconds.  The
+        receiver is created once and ``receive_messages`` is called in a
+        loop on the same link, which is the SDK's documented usage.
+
+        ``handler`` is invoked once per message; we ``complete_message``
+        on success and ``abandon_message`` on handler error so failed
+        messages remain visible for redelivery (and eventually the
+        subscription's dead-letter queue) instead of being silently lost.
+        """
+        if not subscription_name:
+            raise ValueError("subscription_name is required for Service Bus topics")
+
+        client = await self._get_client()
+        async with client.get_subscription_receiver(
+            topic_name=topic_name,
+            subscription_name=subscription_name,
+            max_wait_time=int(timeout),
+        ) as receiver:
+            logger.info(
+                "[ServiceBus] consumer attached: %s/%s",
+                topic_name, subscription_name,
+            )
+            while True:
+                try:
+                    messages = await receiver.receive_messages(
+                        max_message_count=1, max_wait_time=int(timeout)
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "[ServiceBus] receive_messages failed on %s/%s — "
+                        "will retry",
+                        topic_name, subscription_name,
+                    )
+                    await asyncio.sleep(2)
+                    continue
+
+                if not messages:
+                    # Empty receive — keep the link open and poll again.
+                    continue
+
+                msg = messages[0]
+                try:
+                    payload = json.loads(str(msg))
+                except json.JSONDecodeError:
+                    logger.exception(
+                        "[ServiceBus] non-JSON message on %s/%s — "
+                        "dead-lettering",
+                        topic_name, subscription_name,
+                    )
+                    await receiver.dead_letter_message(
+                        msg, reason="non_json_payload"
+                    )
+                    continue
+
+                try:
+                    await handler(payload)
+                except Exception:
+                    logger.exception(
+                        "[ServiceBus] handler error on %s/%s — abandoning",
+                        topic_name, subscription_name,
+                    )
+                    await receiver.abandon_message(msg)
+                    continue
+
+                await receiver.complete_message(msg)
 
     async def close(self) -> None:
         if self._client:
@@ -158,41 +267,40 @@ class EventPublisher:
         handler: MessageHandler,
         poll_interval: float = 5.0,
     ) -> None:
-        """Start a background task that polls a topic subscription and calls handler."""
+        """Start a background subscriber task.
 
-        async def _poll_loop():
+        Delegates to ``backend.consume()``, which holds a single receiver
+        open and dispatches messages from the same AMQP link.  The
+        previous implementation re-opened the link on every poll, causing
+        a continuous attach/detach storm visible in the SDK's INFO logs.
+        """
+
+        async def _subscriber_task():
             logger.info(
-                f"[Subscriber] Listening on topic '{topic_name}' "
-                f"subscription '{subscription_name}'..."
+                "[Subscriber] Listening on '%s/%s'",
+                topic_name, subscription_name,
             )
-            while True:
-                try:
-                    raw = await self._backend.receive(
-                        topic_name,
-                        subscription_name=subscription_name,
-                        timeout=poll_interval,
-                    )
-                    if raw:
-                        message = json.loads(raw)
-                        logger.info(
-                            f"[Subscriber] Received message on "
-                            f"'{topic_name}/{subscription_name}'"
-                        )
-                        await handler(message)
-                except asyncio.CancelledError:
-                    logger.info(
-                        f"[Subscriber] Stopped listening on "
-                        f"'{topic_name}/{subscription_name}'"
-                    )
-                    break
-                except Exception as e:
-                    logger.exception(
-                        f"[Subscriber] Error processing message on "
-                        f"'{topic_name}/{subscription_name}': {e}"
-                    )
-                    await asyncio.sleep(1)  # Back off on error
+            try:
+                await self._backend.consume(
+                    topic_name=topic_name,
+                    subscription_name=subscription_name,
+                    handler=handler,
+                    timeout=poll_interval,
+                )
+            except asyncio.CancelledError:
+                logger.info(
+                    "[Subscriber] Stopped listening on '%s/%s'",
+                    topic_name, subscription_name,
+                )
+                raise
+            except Exception:
+                logger.exception(
+                    "[Subscriber] consumer crashed on '%s/%s' — "
+                    "task exiting; restart the app to recover",
+                    topic_name, subscription_name,
+                )
 
-        task = asyncio.create_task(_poll_loop())
+        task = asyncio.create_task(_subscriber_task())
         self._subscriber_tasks.append(task)
 
     async def close(self) -> None:
