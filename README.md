@@ -44,11 +44,14 @@ See [`docs/deployment/README.md`](docs/deployment/README.md) for the full playbo
 - **[`docs/deployment/troubleshooting.md`](docs/deployment/troubleshooting.md)** — known failure modes + fixes.
 - **[`infra/bicep/README.md`](infra/bicep/README.md)** — Bicep parameter reference.
 
-### Frontend integration (pre-existing)
+### Frontend integration
 - [`docs/fe_rbac_integration_guide.md`](docs/fe_rbac_integration_guide.md) — org-side RBAC.
 - [`docs/fe_admin_rbac_integration_guide.md`](docs/fe_admin_rbac_integration_guide.md) — platform-side RBAC.
 - [`docs/fe_batch_scoring_integration_guide.md`](docs/fe_batch_scoring_integration_guide.md) — batch scoring API.
-- [`docs/fe_monitoring_integration_guide.md`](docs/fe_monitoring_integration_guide.md) — admin dashboards.
+- [`docs/fe_monitoring_integration_guide.md`](docs/fe_monitoring_integration_guide.md) — admin monitoring dashboards.
+- [`docs/fe_dashboard_integration_guide.md`](docs/fe_dashboard_integration_guide.md) — overview-dashboard endpoints (`/stats`, decision filters, model-ops `promoted_at`).
+- [`docs/fe_admin_cross_org_reads_guide.md`](docs/fe_admin_cross_org_reads_guide.md) — admin cross-org reads + platform-wide score stats.
+- [`docs/fe_changelog_2026-04-27.md`](docs/fe_changelog_2026-04-27.md) — delta-only release notes for the latest two FE-affecting changes (embedded `organization` block + `by_org` removal).
 - [`docs/de_feature_mapping.md`](docs/de_feature_mapping.md) — data-engineering feature schema.
 
 ---

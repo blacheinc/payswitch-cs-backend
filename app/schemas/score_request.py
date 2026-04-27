@@ -158,6 +158,21 @@ class ScoreError(BaseModel):
     details: dict[str, Any] | None = None
 
 
+class OrganizationSummary(BaseModel):
+    """Lightweight organisation reference embedded in scoring responses.
+
+    Always populated on list/detail responses so the FE can render an
+    org name and short_name directly without a follow-up lookup.  This
+    matters most for the cross-org admin views (where the row's org may
+    differ from the caller's context), but org-side responses include it
+    too for shape consistency.
+    """
+
+    id: UUID
+    name: str
+    short_name: str | None = None
+
+
 class ScoreRequestResponse(BaseModel):
     """Full score response – matches PRD Section 7.2."""
 
@@ -165,6 +180,7 @@ class ScoreRequestResponse(BaseModel):
     request_id: str
     reference_id: str | None = None
     status: str
+    organization: OrganizationSummary | None = None
     applicant: ApplicantSummary | None = None
     loan_request: LoanRequestSummary | None = None
     score: ScoreValue | None = None
@@ -186,6 +202,7 @@ class ScoreRequestSummary(BaseSchema):
     tracking_id: str
     reference_id: str | None
     status: str
+    organization: OrganizationSummary | None = None
     applicant_name: str | None = None
     loan_amount: float | None = None
     loan_purpose: str | None = None
@@ -470,30 +487,10 @@ class ScoreRequestStatsResponse(BaseModel):
     needs_attention: StatsNeedsAttention
 
 
-# ── Admin platform stats (GET /admin/score-requests/stats) ────────────────────
-
-
-class OrgBreakdownEntry(BaseModel):
-    """One row of the platform-wide ``by_org`` breakdown.
-
-    Returned only when an admin omits ``organization_id`` — gives the
-    platform overview a tile-friendly per-tenant slice.
-    """
-
-    organization_id: UUID
-    name: str
-    short_name: str | None = None
-    total_requests: int
-    decided: int
-    approval_rate_pct: float
-
-
-class PlatformScoreRequestStatsResponse(ScoreRequestStatsResponse):
-    """Same shape as the org stats response plus a per-org breakdown.
-
-    Inherits the platform-wide aggregates (everything across all orgs in
-    the window) and adds ``by_org`` so the admin overview can render a
-    sortable per-tenant table.
-    """
-
-    by_org: list[OrgBreakdownEntry]
+# NOTE: An earlier iteration exposed an ``OrgBreakdownEntry`` /
+# ``PlatformScoreRequestStatsResponse`` pair so ``/admin/score-requests/stats``
+# could embed an unpaginated per-org list.  That conflated stat aggregation
+# with a paginated resource and was removed — the admin endpoint now returns
+# the same ``ScoreRequestStatsResponse`` shape as the org endpoint, scoped
+# either platform-wide or to a single ``organization_id``.  Per-org tables
+# are built FE-side by fanning out from ``GET /admin/organizations``.

@@ -43,6 +43,7 @@ from app.schemas.score_request import (
     CreateScoreRequestInput,
     HardStopDeclineResponse,
     LoanRequestSummary,
+    OrganizationSummary,
     OutcomeResponse,
     OverrideDecisionRequest,
     OverrideDecisionResponse,
@@ -66,6 +67,21 @@ from app.storage.cache import get_redis_cache
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/score-requests", tags=["Scoring API"])
+
+
+def _org_summary(score_req: ScoreRequest) -> OrganizationSummary | None:
+    """Project the eager-loaded ``ScoreRequest.organization`` into the API
+    response shape. Returns ``None`` if the relationship hasn't been loaded
+    or the row is somehow orphaned (shouldn't happen given the FK).
+    """
+    org = getattr(score_req, "organization", None)
+    if org is None:
+        return None
+    return OrganizationSummary(
+        id=org.id,
+        name=org.name,
+        short_name=getattr(org, "short_name", None),
+    )
 
 
 def _extract_summaries(
@@ -741,10 +757,22 @@ async def create_score_request(
         else None
     )
 
+    # The auth context already carries the caller's org for non-admin
+    # callers (admins don't create requests today, so this is always
+    # populated in practice).
+    org_summary = None
+    if auth.organization is not None:
+        org_summary = OrganizationSummary(
+            id=auth.organization.id,
+            name=auth.organization.name,
+            short_name=getattr(auth.organization, "short_name", None),
+        )
+
     response = ScoreRequestResponse(
         request_id=tracking_id,
         reference_id=body.reference_id,
         status=score_req.status.value,
+        organization=org_summary,
         applicant=ApplicantSummary(
             full_name=body.applicant.full_name,
             date_of_birth=str(body.applicant.date_of_birth),
@@ -834,7 +862,8 @@ async def get_score_request(
     Platform admins with ``admin.score_requests.read`` may fetch any
     request regardless of org — those reads are recorded in ``audit_logs``.
     """
-    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result)).where(
+    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result),
+        selectinload(ScoreRequest.organization),).where(
         ScoreRequest.tracking_id == request_id,
     )
     # Restrict by org for non-admin callers; admins (with the perm) see any row.
@@ -861,6 +890,7 @@ async def get_score_request(
         request_id=score_req.tracking_id,
         reference_id=score_req.reference_id,
         status=score_req.status.value,
+        organization=_org_summary(score_req),
         applicant=applicant,
         loan_request=loan,
         scoring_result=score_req.scoring_result,
@@ -1081,7 +1111,8 @@ async def list_score_requests(
         resource_type="score_requests",
     )
 
-    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result))
+    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result),
+        selectinload(ScoreRequest.organization),)
     count_query = select(func.count(ScoreRequest.id))
     if org_filter.organization_id is not None:
         query = query.where(ScoreRequest.organization_id == org_filter.organization_id)
@@ -1147,6 +1178,7 @@ async def list_score_requests(
                 tracking_id=r.tracking_id,
                 reference_id=r.reference_id,
                 status=r.status.value,
+                organization=_org_summary(r),
                 applicant_name=applicant_data.get("full_name"),
                 loan_amount=loan_data.get("amount"),
                 loan_purpose=loan_data.get("purpose"),

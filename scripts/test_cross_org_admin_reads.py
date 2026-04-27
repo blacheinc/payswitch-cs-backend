@@ -10,8 +10,8 @@ Validates the four-cell behavioural matrix from
 
 Plus the new admin-only platform endpoint:
 
-  * GET /admin/score-requests/stats (no org)              → with by_org[]
-  * GET /admin/score-requests/stats (?organization_id=…)  → without by_org
+  * GET /admin/score-requests/stats (no org)              → platform aggregates
+  * GET /admin/score-requests/stats (?organization_id=…)  → scoped aggregates
 
 Usage:
     .venv/bin/python scripts/test_cross_org_admin_reads.py
@@ -111,20 +111,18 @@ def main() -> None:
             f"bad uuid → 4xx (got {r.status_code})",
         )
 
-        print("\n═══ Step 7: Admin — /admin/score-requests/stats with by_org ═══")
+        print("\n═══ Step 7: Admin — /admin/score-requests/stats (platform-wide) ═══")
         r = c.get("/admin/score-requests/stats?period=30d", headers=_h(admin_token))
         _ok(r.status_code == 200, f"platform stats → 200 (got {r.status_code})")
         body: dict[str, Any] = r.json()
         _ok("current" in body and "previous" in body, "platform stats has current/previous")
-        _ok("by_org" in body, "platform stats has by_org breakdown")
-        if body["by_org"]:
-            row = body["by_org"][0]
-            _ok(
-                {"organization_id", "name", "total_requests", "decided", "approval_rate_pct"}
-                <= set(row),
-                "by_org row has expected fields",
-            )
-            print(f"     top org: {row['name']} total={row['total_requests']}")
+        # by_org was dropped — per-org tables are built FE-side by paginating
+        # /admin/organizations + fanning out scoped stats calls.
+        _ok(
+            "by_org" not in body,
+            "platform stats no longer carries by_org (FE fans out from /admin/organizations)",
+        )
+        print(f"     platform total: {body['current']['total_requests']}")
 
         print("\n═══ Step 8: Admin — /admin/score-requests/stats?organization_id ═══")
         r = c.get(
@@ -132,8 +130,11 @@ def main() -> None:
             headers=_h(admin_token),
         )
         _ok(r.status_code == 200, f"scoped platform stats → 200 (got {r.status_code})")
-        body = r.json()
-        _ok(body["by_org"] == [], "by_org is empty when org_id is set")
+        scoped = r.json()
+        _ok(
+            set(scoped.keys()) == set(body.keys()),
+            "scoped response shape matches platform-wide response shape",
+        )
 
         print("\n═══ Step 9: Cross-org read writes an audit log row ═══")
         # Give the previous request's commit a moment, then count audit rows

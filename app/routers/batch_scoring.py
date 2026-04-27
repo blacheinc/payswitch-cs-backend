@@ -154,7 +154,13 @@ async def list_batch_jobs(
         resource_type="batch_scoring",
     )
 
-    q = select(BulkScoringJob).where(BulkScoringJob.job_id.is_not(None))
+    from sqlalchemy.orm import selectinload
+
+    q = (
+        select(BulkScoringJob)
+        .options(selectinload(BulkScoringJob.organization))
+        .where(BulkScoringJob.job_id.is_not(None))
+    )
     if org_filter.organization_id is not None:
         q = q.where(BulkScoringJob.organization_id == org_filter.organization_id)
     if status:
@@ -244,6 +250,7 @@ async def get_batch_job_status(
                 "failed": failed,
                 "cancelled": cancelled,
             },
+            "organization": _job_org_summary(job),
             "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
             "started_at": (
                 job.started_at.isoformat().replace("+00:00", "Z")
@@ -317,6 +324,7 @@ async def get_batch_results(
         status_code=200,
         content={
             "job_id": job_id,
+            "organization": _job_org_summary(job),
             "items": [_item_result(i) for i in items],
             "total": total,
             "page": page,
@@ -420,8 +428,17 @@ async def _resolve_batch_job_for_caller(
     ``organization_id``.  Platform admins with the
     ``admin.batch_scoring.read`` permission may fetch any job — those
     accesses are recorded in ``audit_logs``.
+
+    The caller's organisation row is eager-loaded so the response can
+    embed an ``organization`` block without a follow-up query.
     """
-    q = select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
+    from sqlalchemy.orm import selectinload
+
+    q = (
+        select(BulkScoringJob)
+        .options(selectinload(BulkScoringJob.organization))
+        .where(BulkScoringJob.job_id == job_id)
+    )
     if auth.user_type != "admin":
         q = q.where(BulkScoringJob.organization_id == auth.organization_id)
 
@@ -457,6 +474,22 @@ def _map_status(status: BulkJobStatus) -> str:
     }.get(status, status.value)
 
 
+def _job_org_summary(job: BulkScoringJob) -> dict | None:
+    """Build the embedded ``organization`` block on batch responses.
+
+    Returns ``None`` if the relationship hasn't been eager-loaded — the
+    list/detail endpoints set it up; ad-hoc paths can fall through.
+    """
+    org = getattr(job, "organization", None)
+    if org is None:
+        return None
+    return {
+        "id": str(org.id),
+        "name": org.name,
+        "short_name": getattr(org, "short_name", None),
+    }
+
+
 def _job_list_item(job: BulkScoringJob) -> dict:
     return {
         "job_id": job.job_id,
@@ -464,6 +497,7 @@ def _job_list_item(job: BulkScoringJob) -> dict:
         "total": job.total_records,
         "completed": job.processed_records,
         "failed": job.error_count,
+        "organization": _job_org_summary(job),
         "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
         "completed_at": (
             job.completed_at.isoformat().replace("+00:00", "Z")

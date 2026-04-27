@@ -125,6 +125,37 @@ The endpoint runs 2 aggregate queries (current + previous window) plus 2 instant
 
 ---
 
+## 1b. New: `organization` block embedded on every read response
+
+Every score-request and batch-job read response now carries a thin `organization` summary so list/detail rows can render the org name without a follow-up lookup. Net-additive — your existing types just need the field added; nothing changed semantically about the other fields.
+
+**Shape**:
+
+```typescript
+export interface OrganizationSummary {
+  id: string;            // uuid
+  name: string;
+  short_name: string | null;
+}
+```
+
+**Endpoints that now include it**:
+
+| Endpoint | Where the field appears |
+|---|---|
+| `GET /v1/score-requests` | each item in `items[].organization` |
+| `GET /v1/score-requests/{tracking_id}` | top-level `organization` |
+| `POST /v1/score-requests` | top-level `organization` (response) |
+| `GET /v1/score/batch` | each item in `items[].organization` |
+| `GET /v1/score/batch/{job_id}` | top-level `organization` |
+| `GET /v1/score/batch/{job_id}/results` | top-level `organization` |
+
+For org-side callers this will always be the caller's own org — feel free to ignore it. For admins drilling cross-org ([cross-org guide](./fe_admin_cross_org_reads_guide.md)) it's the row's owning org and the reason this field exists at all.
+
+`short_name` is nullable (legacy orgs); fall back to `name` for display.
+
+---
+
 ## 2. `GET /v1/score-requests` — extended filters
 
 The existing list endpoint now supports filtering by scoring decision and confirms the pre-existing status filter for the `pending | processing | completed | failed` values.
@@ -217,6 +248,13 @@ All endpoints use the same caching + rate-limit headers as the rest of the API.
 ## 5. TypeScript interfaces
 
 ```typescript
+// ── Embedded org summary (new — see §1b) ────────────────────────────
+export interface OrganizationSummary {
+  id: string;             // uuid
+  name: string;
+  short_name: string | null;
+}
+
 // ── GET /v1/score-requests/stats ────────────────────────────────────
 
 export type ScoreDashboardPeriod = 'today' | '7d' | '30d' | '90d';
@@ -367,153 +405,15 @@ After FE deploys confirm stats are correct, remove the legacy branch.
 
 ---
 
-## 8. Cross-org admin reads
+## 8. Admin cross-org reads → see [`fe_admin_cross_org_reads_guide.md`](./fe_admin_cross_org_reads_guide.md)
 
-Platform admins (`user_type === "admin"`) holding the `admin.score_requests.read` or `admin.batch_scoring.read` permissions can now drill into any organisation's data through the **same endpoints** the org dashboard uses, plus a new platform-stats endpoint built for the admin overview.
+Platform admins (`user_type === "admin"`) holding `admin.score_requests.read` or `admin.batch_scoring.read` can drill into any organisation's data through the same endpoints documented above, plus the new `GET /admin/score-requests/stats` endpoint that returns platform-wide aggregates with a per-org breakdown.
 
-### 8.1 `organization_id=` query param on existing endpoints
+The full integration contract — `organization_id` query-param semantics across every read endpoint, the platform stats endpoint, the FE fan-out pattern for paginated per-org tables, audit-log fields, TypeScript additions, React Query examples, error matrix, and UX notes — lives in its own guide so org-side and admin-side work can evolve independently:
 
-| Endpoint | Behaviour for org caller | Behaviour for admin caller |
-|---|---|---|
-| `GET /v1/score-requests` | Param ignored if matches own org; **403** otherwise | Param scopes to that org; omit for cross-org list across the whole platform |
-| `GET /v1/score-requests/{tracking_id}` | Org-scoped lookup as before | Admin can fetch any tracking ID; access is recorded in `audit_logs` |
-| `GET /v1/score-requests/{tracking_id}/scoring-result` | Same | Same |
-| `GET /v1/score-requests/stats?period=` | Param ignored if matches own org; **403** otherwise | Param scopes to that org; omit for platform-wide aggregates |
-| `GET /v1/score/batch` | Org-scoped list | Param scopes; omit for cross-org list |
-| `GET /v1/score/batch/{job_id}` | Org-scoped | Admin can fetch any job; audit-logged |
-| `GET /v1/score/batch/{job_id}/results` | Same | Same |
+> **[`fe_admin_cross_org_reads_guide.md`](./fe_admin_cross_org_reads_guide.md)** — Admin Cross-Org Reads Integration Guide
 
-**Permissions** (cumulative — admins typically already have a `*` wildcard via `SUPER_ADMIN`, but operational admins need the explicit grant):
-
-- `admin.score_requests.read` — granted to `SUPER_ADMIN`, `RISK_ANALYST`, `COMPLIANCE_OFFICER`.
-- `admin.batch_scoring.read` — same set of roles.
-
-`MODEL_OPS_ENGINEER` and `INFRASTRUCTURE_ENGINEER` deliberately do **not** have these grants — they don't need to see individual decisions.
-
-### 8.2 🆕 `GET /admin/score-requests/stats` — platform-wide overview
-
-Designed for the admin overview tile that needs "platform totals + per-org breakdown" in one call. Admin-only; org callers get 403.
-
-```http
-GET /admin/score-requests/stats?period=7d
-Authorization: Bearer <admin-jwt>
-```
-
-**Query params**
-
-| Param | Required | Notes |
-|---|---|---|
-| `period` | ✅ | `today` · `7d` · `30d` · `90d` |
-| `organization_id` | ❌ | Omit for platform-wide; pass to scope to one org (response is identical to the org `/v1/score-requests/stats` call but with `by_org=[]`) |
-
-**Permission**: `admin.score_requests.read`.
-
-**Response `200`** (cross-platform — `organization_id` omitted):
-
-```json
-{
-  "period": "7d",
-  "generated_at": "2026-04-24T15:04:20.269477Z",
-  "current": { "total_requests": 1820, "decided": 1701, "approval_rate_pct": 51.2, ... },
-  "previous": { "total_requests": 1640, "decided": 1502, "approval_rate_pct": 49.8, ... },
-  "trend": { "total_delta_pct": 11.0, "approval_delta_pp": 1.4, "score_delta": 3 },
-  "needs_attention": { "referred": 84, "pending_or_processing": 12, "failed": 6 },
-  "by_org": [
-    {
-      "organization_id": "a12f3d9c-8d83-4156-9372-383c3075fd49",
-      "name": "Viktrust Bank",
-      "short_name": "viktrust",
-      "total_requests": 412,
-      "decided": 391,
-      "approval_rate_pct": 56.1
-    }
-  ]
-}
-```
-
-`current`, `previous`, `trend`, `needs_attention` are exactly the same shapes as the org-side endpoint; the FE can re-use its existing components for those tiles.
-
-`by_org` is **only populated when `organization_id` is omitted**. When scoped to a single org, `by_org` is `[]` so the response is structurally compatible with org-side handling.
-
-### 8.3 Audit log
-
-Every cross-org admin read writes one `AuditLog` row:
-
-| Field | Value |
-|---|---|
-| `actor_type` | `"admin"` |
-| `actor_id` / `actor_email` | The admin |
-| `organization_id` | The org being read (or `null` for cross-org list) |
-| `action` | `"score_requests.read_cross_org"` or `"batch_scoring.read_cross_org"` |
-| `resource_type` | `"score_requests"` / `"batch_scoring"` |
-| `resource_id` | The tracking ID or job ID, when reading a specific row |
-
-Org-side reads (a customer reading their own data) do **not** write audit rows — that would be noise.
-
-### 8.4 TypeScript additions
-
-```typescript
-// New optional param on every cross-org-aware list/detail/stats call
-export interface CrossOrgScopedParams {
-  organization_id?: string;   // admin-only
-}
-
-// Augment existing list params
-export interface ListScoreRequestsParams extends CrossOrgScopedParams {
-  page?: number;
-  per_page?: number;
-  status?: ScoreRequestStatus;
-  decision?: ScoreDecision[] | ScoreDecision;
-}
-
-// Per-org breakdown row
-export interface OrgBreakdownEntry {
-  organization_id: string;     // uuid
-  name: string;
-  short_name: string | null;
-  total_requests: number;
-  decided: number;
-  approval_rate_pct: number;
-}
-
-// Admin platform stats — extends the org-side response shape
-export interface PlatformScoreRequestStatsResponse extends ScoreRequestStatsResponse {
-  by_org: OrgBreakdownEntry[];   // [] when organization_id is set
-}
-```
-
-### 8.5 React Query examples
-
-```tsx
-// Admin overview tile — platform-wide
-export function usePlatformScoreStats(period: ScoreDashboardPeriod = '7d') {
-  return useQuery<PlatformScoreRequestStatsResponse>({
-    queryKey: ['admin', 'score-requests', 'stats', period],
-    queryFn: () =>
-      api
-        .get(`/admin/score-requests/stats?period=${period}`)
-        .then((r) => r.data),
-    refetchInterval: period === 'today' ? 60_000 : 5 * 60_000,
-    staleTime: period === 'today' ? 30_000 : 2 * 60_000,
-  });
-}
-
-// Admin drilling into a specific org's score requests
-export function useOrgScoreRequestsAsAdmin(orgId: string) {
-  return useQuery({
-    queryKey: ['admin', 'score-requests', orgId],
-    queryFn: () =>
-      api
-        .get('/v1/score-requests', { params: { organization_id: orgId, per_page: 50 } })
-        .then((r) => r.data),
-    enabled: Boolean(orgId),
-  });
-}
-```
-
-### 8.6 Mutations remain org-only
-
-By design, write paths (`POST /v1/score-requests`, `POST /v1/score-requests/{id}/override`, `POST /v1/score-requests/{id}/outcome`, `POST /v1/score/batch`, `POST /v1/score/batch/{id}/cancel`) are **not** opened up to cross-org admin access. Decisions and overrides remain the org's call. If a support scenario needs admin-initiated scoring on behalf of an org, that's a separate endpoint to be designed (not yet shipped).
+Org users on this dashboard never need to send `organization_id`; everything in §1–§7 above continues to work unchanged for them.
 
 ---
 
