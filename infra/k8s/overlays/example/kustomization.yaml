@@ -1,0 +1,62 @@
+# Example environment overlay.
+#
+# Fork this for each environment (e.g. overlays/prod, overlays/staging).
+# Each overlay typically:
+#   1. Bumps the namespace (so prod + staging can coexist in one cluster).
+#   2. Replaces the public host on the Ingress.
+#   3. Patches the ConfigMap with env-specific URLs.
+#   4. Patches HPA thresholds.
+#   5. Pins a specific image tag (or lets CI bump it).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Override the namespace per environment so multiple envs can share a
+# cluster.  Make sure the namespace.yaml in the base also reflects this
+# OR remove it from base/kustomization.yaml's resources and create the
+# namespace once out-of-band.
+namespace: payswitch-credit-scoring-prod
+
+namePrefix: ""        # set to e.g. "prod-" if you want unique resource names
+
+commonLabels:
+  app.kubernetes.io/instance: payswitch-prod
+  environment: prod
+
+# Image override — pin to a specific tag here, or let GitLab CI rewrite
+# this file on every successful build.
+images:
+  - name: registry.gitlab.com/your-org/payswitch-credit-scoring
+    newTag: "1.0.0"
+
+# ── Ingress host + TLS ───────────────────────────────────────────────
+patches:
+  - target:
+      kind: Ingress
+      name: payswitch-api
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: api.your-domain.com
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: api.your-domain.com
+      - op: replace
+        path: /spec/tls/0/secretName
+        value: payswitch-api-tls-prod
+
+# ── ConfigMap overrides ──────────────────────────────────────────────
+configMapGenerator:
+  - name: payswitch-config
+    behavior: merge
+    literals:
+      - APP_ENV=production
+      - DASHBOARD_BASE_URL=https://dashboard.your-domain.com
+      - EMAIL_FROM=noreply@your-domain.com
+      - ALLOWED_ORIGINS=https://dashboard.your-domain.com
+      - DE_INFERENCE_URL=https://your-de.azurewebsites.net/api/transform/inference
+      - ORCHESTRATOR_BASE_URL=https://your-orchestrator.azurewebsites.net
+      - AZURE_KEYVAULT_URL=https://your-kv.vault.azure.net/
+      - BOOTSTRAP_ADMIN_EMAIL=admin@your-domain.com

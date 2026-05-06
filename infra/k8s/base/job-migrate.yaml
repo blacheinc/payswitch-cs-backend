@@ -1,0 +1,48 @@
+# Pre-sync database migration Job.
+#
+# Run as an Argo CD Sync Hook (PreSync) — Argo waits for the Job to
+# succeed before applying the new Deployment.  Failed migrations block
+# traffic from ever touching the new image.
+#
+# Mechanically equivalent to the migration step in entrypoint.sh, just
+# explicit and visible in the Argo UI.  When this Job runs first, the
+# subsequent pod start re-runs `alembic upgrade head` as a no-op.
+#
+# Idempotent: Argo deletes + recreates the Job on every sync because of
+# the BeforeHookCreation policy below, so the Job name doesn't need to
+# encode the revision.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: payswitch-migrate
+  namespace: payswitch-credit-scoring
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 1     # one retry, then fail the sync — don't loop forever
+  ttlSecondsAfterFinished: 86400  # keep completed Jobs for 24 h for inspection
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payswitch-api
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: registry.gitlab.com/your-org/payswitch-credit-scoring:latest
+          # Skip the entrypoint's bootstrap-admin step — only run migrations.
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: payswitch-config
+            - secretRef:
+                name: payswitch-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

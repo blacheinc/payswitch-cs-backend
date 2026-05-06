@@ -1,0 +1,51 @@
+# Example Argo CD Application that watches this repo and syncs the
+# `infra/k8s/overlays/example` overlay into the cluster.
+#
+# Tweak:
+#   * spec.source.repoURL       — to the cluster's GitOps repo
+#   * spec.source.path          — to the overlay path inside that repo
+#   * spec.destination.server   — to the target cluster
+#   * spec.project              — to the Argo project (if not "default")
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: payswitch-api-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitlab.com/your-org/payswitch-credit-scoring.git
+    targetRevision: main
+    path: infra/k8s/overlays/example
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: payswitch-credit-scoring-prod
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      # Run the migration Job (PreSync hook) before applying the
+      # Deployment.  Argo waits for the Job to succeed; failure blocks
+      # the rest of the sync.
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    # Avoid noisy autosync loops if the cluster mutates fields the
+    # operator legitimately controls (e.g. HPA replica count).
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m
+        factor: 2
+  # Argo will alert on drift and refuse to mark the app "synced" if any
+  # of the following fields drift — useful for catching out-of-band edits.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas      # HPA controls this; ignore

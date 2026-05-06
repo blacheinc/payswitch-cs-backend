@@ -1,0 +1,100 @@
+# Main API Deployment.
+#
+# One container per Pod.  No sidecars.  Liveness + readiness both hit
+# /health — readiness gates traffic until the FastAPI lifespan has
+# completed (which is how new pods avoid serving while the seeder runs).
+#
+# Each replica hosts:
+#   * 1 FastAPI process
+#   * 5 in-process batch-scoring workers (asyncio tasks)
+#   * 3 Service Bus subscribers (asyncio tasks)
+# Total parallelism = replicas × 5 batch workers.  See HPA for tuning.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payswitch-api
+  namespace: payswitch-credit-scoring
+  labels:
+    app.kubernetes.io/name: payswitch-api
+    app.kubernetes.io/component: backend
+spec:
+  replicas: 2     # overridden by HPA at runtime
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payswitch-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: payswitch-api
+        app.kubernetes.io/component: backend
+    spec:
+      # Allow up to 60 s for graceful shutdown so in-flight scoring
+      # requests + Service Bus message acks complete before SIGKILL.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: api
+          # Image tag is patched per environment by the kustomize overlay
+          # OR by the GitLab CI pipeline (commit-bumping `kustomization.yaml`).
+          image: registry.gitlab.com/your-org/payswitch-credit-scoring:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: payswitch-config
+            - secretRef:
+                name: payswitch-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1024Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # The image's ENTRYPOINT runs alembic migrations on every boot.
+          # If you adopt the pre-sync migration Job pattern (job-migrate.yaml)
+          # this is harmless — the second `alembic upgrade head` call is a no-op.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30   # 30 × 10 s = 5 min boot grace for migrations
+            periodSeconds: 10
+      # If the image lives in a private registry, configure imagePullSecrets here:
+      # imagePullSecrets:
+      #   - name: gitlab-registry-credentials
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: payswitch-api
+  namespace: payswitch-credit-scoring
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: payswitch-api

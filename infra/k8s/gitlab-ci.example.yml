@@ -1,0 +1,97 @@
+# Example GitLab CI pipeline for the PaySwitch backend.
+#
+# Three stages, end-to-end:
+#   1. test     — pytest + the matrix tests (fast, gates everything else)
+#   2. build    — build the container image + push to GitLab Container Registry
+#   3. release  — rewrite `infra/k8s/overlays/<env>/kustomization.yaml`
+#                 with the new image tag and commit on a release branch.
+#                 Argo CD picks the change up and syncs.
+#
+# Image tag = short commit SHA on main; release branches get a semver tag.
+# Adjust to match the client's tagging conventions.
+#
+# Required CI/CD variables (Project Settings → CI/CD → Variables):
+#   CI_REGISTRY_USER          — usually $CI_REGISTRY_USER (built-in)
+#   CI_REGISTRY_PASSWORD      — usually $CI_REGISTRY_PASSWORD (built-in)
+#   CI_REGISTRY_IMAGE         — built-in
+#   GITOPS_DEPLOY_TOKEN       — a project access token with write_repository
+#                               on whichever repo holds the manifests (often
+#                               the same repo, sometimes a separate cluster repo).
+
+stages:
+  - test
+  - build
+  - release
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  KUSTOMIZE_OVERLAY: infra/k8s/overlays/example
+
+# ── Stage 1: tests ────────────────────────────────────────────────────────────
+test:
+  stage: test
+  image: python:3.11-slim
+  cache:
+    key:
+      files:
+        - pyproject.toml
+    paths:
+      - .cache/pip
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends gcc libpq-dev
+    - pip install --cache-dir .cache/pip -e ".[dev]"
+  script:
+    - pytest tests/ -q
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ── Stage 2: container build + push ──────────────────────────────────────────
+build:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build --pull
+        --tag "$IMAGE_NAME:$IMAGE_TAG"
+        --tag "$IMAGE_NAME:latest"
+        --label "org.opencontainers.image.revision=$CI_COMMIT_SHA"
+        --label "org.opencontainers.image.source=$CI_PROJECT_URL"
+        .
+    - docker push "$IMAGE_NAME:$IMAGE_TAG"
+    - docker push "$IMAGE_NAME:latest"
+  rules:
+    # Build on main + tags, not on every MR (cuts noise and registry storage).
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+# ── Stage 3: GitOps tag bump ─────────────────────────────────────────────────
+# Rewrite the overlay's kustomization.yaml to point at the new tag, then
+# commit + push.  Argo CD sees the manifest change and syncs.
+release:
+  stage: release
+  image: alpine/git:latest
+  before_script:
+    - apk add --no-cache yq
+    - git config --global user.email "ci@gitlab.example"
+    - git config --global user.name  "GitLab CI"
+  script:
+    # Clone the manifests repo (or use the current repo if manifests are co-located).
+    - git clone "https://gitlab-ci-token:$GITOPS_DEPLOY_TOKEN@gitlab.com/your-org/payswitch-credit-scoring.git" gitops
+    - cd gitops
+    - git checkout main
+    # Patch the image tag.
+    - yq -i ".images[0].newTag = \"$IMAGE_TAG\"" "$KUSTOMIZE_OVERLAY/kustomization.yaml"
+    - git add "$KUSTOMIZE_OVERLAY/kustomization.yaml"
+    - git commit -m "release: bump payswitch-api → $IMAGE_TAG [skip ci]" || echo "no changes"
+    - git push origin main
+  rules:
+    # Only auto-release from main.  Tag-driven prod releases get a separate job.
+    - if: $CI_COMMIT_BRANCH == "main"

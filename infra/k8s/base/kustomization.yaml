@@ -1,0 +1,34 @@
+# Canonical Kustomize base.  Overlays consume this via:
+#
+#   resources:
+#     - ../../base
+#
+# Pick exactly ONE of `secret.example.yaml` or `external-secret.yaml`
+# in the resources list below — leave the other commented out.  The
+# default below assumes External Secrets Operator is installed; flip
+# the comments if you're using a vanilla Secret managed out-of-band.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - external-secret.yaml          # ESO-managed Secret (recommended)
+  # - secret.example.yaml         # Plain Secret — populate via CI / SealedSecret
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - job-migrate.yaml
+
+namespace: payswitch-credit-scoring
+
+commonLabels:
+  app.kubernetes.io/part-of: payswitch
+  app.kubernetes.io/managed-by: argocd
+
+# Image tag substitution — the GitLab CI pipeline patches this on every
+# successful build (see infra/k8s/gitlab-ci.example.yml).
+images:
+  - name: registry.gitlab.com/your-org/payswitch-credit-scoring
+    newTag: latest

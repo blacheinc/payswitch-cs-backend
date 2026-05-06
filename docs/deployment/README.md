@@ -8,7 +8,9 @@ This document is the table of contents for the operational docs. If you're deplo
 
 ## 1. Architecture at a glance
 
-Read [`docs/architecture/overview.md`](../architecture/overview.md) first. One FastAPI container on Azure Container Apps, backed by Postgres / Redis / Service Bus / Storage / Key Vault. Everything provisioned by one Bicep template; everything deployable with one shell script.
+Read [`docs/architecture/overview.md`](../architecture/overview.md) first. One FastAPI container backed by Postgres / Redis / Service Bus / Storage / Key Vault. Everything provisioned by one Bicep template; everything deployable with one shell script.
+
+> **Deploying to Kubernetes instead?** The same image and the same env-var contract work on k8s. See [`k8s-overview.md`](./k8s-overview.md) for the architecture talking points and [`infra/k8s/README.md`](../../infra/k8s/README.md) for working Kustomize manifests + Argo CD + GitLab CI examples. The rest of this guide is specific to the Azure Container Apps target.
 
 ---
 

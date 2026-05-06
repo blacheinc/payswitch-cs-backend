@@ -1,0 +1,39 @@
+# Non-secret runtime configuration for the API.
+#
+# Anything sensitive (DB URL, JWT key, function keys, XDS creds) lives in
+# the Secret manifests instead.  Anything that just shapes app behaviour
+# (URLs, period defaults, log level) lives here so it can be reviewed in
+# code review without redaction.
+#
+# Override per environment via the overlays/ directory.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payswitch-config
+  namespace: payswitch-credit-scoring
+data:
+  # Application
+  APP_ENV: "production"
+  PORT: "8000"
+
+  # Frontend / email links — must be set per env.
+  DASHBOARD_BASE_URL: "https://dashboard.example.com"
+  EMAIL_FROM: "noreply@example.com"
+  ALLOWED_ORIGINS: "https://dashboard.example.com"
+
+  # Downstream service URLs (function keys live in the Secret).
+  DE_INFERENCE_URL: "https://example-de.azurewebsites.net/api/transform/inference"
+  ORCHESTRATOR_BASE_URL: "https://example-orchestrator.azurewebsites.net"
+  CUSTOMER_SERVICE_BASE_URL: "https://example-cs.azurewebsites.net"
+
+  # Email provider — "console" / "smtp" / "resend"
+  EMAIL_PROVIDER: "resend"
+
+  # Bootstrap admin email — the password lives in the Secret.
+  BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
+  BOOTSTRAP_ADMIN_NAME: "Platform Administrator"
+
+  # Key Vault URL — only the URL itself is a ConfigMap entry; tenant +
+  # client id + client secret live in the Secret.  Leave blank to disable
+  # the KV source and rely entirely on env-var-driven secrets.
+  AZURE_KEYVAULT_URL: ""

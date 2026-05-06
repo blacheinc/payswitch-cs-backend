@@ -42,7 +42,9 @@ See [`docs/deployment/README.md`](docs/deployment/README.md) for the full playbo
 - **[`docs/deployment/post-deploy.md`](docs/deployment/post-deploy.md)** — first-run checklist.
 - **[`docs/deployment/runbook.md`](docs/deployment/runbook.md)** — day-2 operations (scaling, rotation, DR).
 - **[`docs/deployment/troubleshooting.md`](docs/deployment/troubleshooting.md)** — known failure modes + fixes.
+- **[`docs/deployment/k8s-overview.md`](docs/deployment/k8s-overview.md)** — Kubernetes deployment talking points (alternative to ACA).
 - **[`infra/bicep/README.md`](infra/bicep/README.md)** — Bicep parameter reference.
+- **[`infra/k8s/README.md`](infra/k8s/README.md)** — Kustomize manifests + Argo CD + GitLab CI examples.
 
 ### Frontend integration
 - [`docs/fe_rbac_integration_guide.md`](docs/fe_rbac_integration_guide.md) — org-side RBAC.

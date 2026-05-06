@@ -1,0 +1,36 @@
+# HTTP entrypoint for the API.
+#
+# IngressClassName, host, and TLS configuration are environment-specific —
+# override them in the overlay.  The annotations shown are common
+# nginx-ingress defaults; swap as needed for traefik / istio / cloud LB.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payswitch-api
+  namespace: payswitch-credit-scoring
+  annotations:
+    # Bumps from the nginx default 1m to 4m to accommodate batch payloads
+    # (up to 100 applicants × ~3 KB each plus headers).
+    nginx.ingress.kubernetes.io/proxy-body-size: "4m"
+    # 60 s upstream timeout — covers the slowest synchronous bureau lookup.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # cert-manager picks up this annotation if installed; remove if not used.
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.example.com
+      secretName: payswitch-api-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: payswitch-api
+                port:
+                  name: http
