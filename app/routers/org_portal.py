@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
@@ -142,10 +143,44 @@ async def invite_user(
     existing_user = existing.scalar_one_or_none()
 
     if existing_user:
-        if existing_user.status != OrgUserStatus.REMOVED:
+        # ACTIVE or SUSPENDED users in any org — cannot re-invite
+        if existing_user.status not in (OrgUserStatus.REMOVED, OrgUserStatus.PENDING):
             raise ConflictError(f"User with email '{body.email}' already exists")
 
-        # Re-activate previously removed user
+        # PENDING — user was invited but hasn't logged in yet; resend the invite
+        if existing_user.status == OrgUserStatus.PENDING:
+            temp_password = generate_temp_password()
+            existing_user.organization_id = auth.organization_id
+            existing_user.name = body.name
+            existing_user.password_hash = hash_password(temp_password)
+            existing_user.role_label = _coerce_role_label(body.role_label)
+            existing_user.email_verification_token = generate_email_verification_token()
+            await db.flush()
+
+            existing_rbac = (
+                await db.execute(
+                    select(OrgUserRole).where(OrgUserRole.org_user_id == existing_user.id)
+                )
+            ).scalar_one_or_none()
+            if existing_rbac:
+                existing_rbac.role_id = role.id
+                existing_rbac.assigned_by = auth.user_id
+            else:
+                db.add(OrgUserRole(
+                    org_user_id=existing_user.id,
+                    role_id=role.id,
+                    assigned_by=auth.user_id,
+                ))
+            await db.flush()
+
+            email_service.send_invite_email(
+                to_email=existing_user.email,
+                temp_password=temp_password,
+                callback_url=body.callback_url,
+            )
+            return OrgUserResponse.model_validate(existing_user)
+
+        # REMOVED — re-activate
         temp_password = generate_temp_password()
         existing_user.organization_id = auth.organization_id
         existing_user.name = body.name
@@ -157,7 +192,6 @@ async def invite_user(
         existing_user.totp_enabled = False
         await db.flush()
 
-        # Assign RBAC role (replace existing if any)
         existing_rbac = (
             await db.execute(
                 select(OrgUserRole).where(OrgUserRole.org_user_id == existing_user.id)
@@ -181,6 +215,7 @@ async def invite_user(
         )
         return OrgUserResponse.model_validate(existing_user)
 
+    # Brand-new user
     temp_password = generate_temp_password()
     new_user = OrgUser(
         organization_id=auth.organization_id,
@@ -192,7 +227,11 @@ async def invite_user(
         email_verification_token=generate_email_verification_token(),
     )
     db.add(new_user)
-    await db.flush()
+
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise ConflictError(f"User with email '{body.email}' already exists")
 
     db.add(OrgUserRole(
         org_user_id=new_user.id,
