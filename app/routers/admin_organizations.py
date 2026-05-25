@@ -7,6 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
@@ -208,17 +209,42 @@ async def provision_organization(
             "Update the organization profile first."
         )
 
-    temp_password = generate_temp_password()
-    org_admin = OrgUser(
-        organization_id=org.id,
-        email=org.primary_contact_email,
-        name=org.primary_contact_name or f"{org.name} Admin",
-        password_hash=hash_password(temp_password),
-        role_label=OrgRoleLabel.ADMIN,
-        status=OrgUserStatus.ACTIVE,
-        email_verification_token=generate_email_verification_token(),
+    # Check whether the primary contact email is already an org user
+    existing_user_result = await db.execute(
+        select(OrgUser).where(OrgUser.email == org.primary_contact_email)
     )
-    db.add(org_admin)
+    existing_org_user = existing_user_result.scalar_one_or_none()
+
+    temp_password = generate_temp_password()
+
+    if existing_org_user:
+        if existing_org_user.status not in (OrgUserStatus.REMOVED, OrgUserStatus.PENDING):
+            raise ConflictError(
+                f"Email '{org.primary_contact_email}' is already associated with another "
+                "organization. Update the organization's primary_contact_email to a unique "
+                "address before provisioning."
+            )
+        # Re-use the existing row (removed or pending from a previous provision attempt)
+        existing_org_user.organization_id = org.id
+        existing_org_user.name = org.primary_contact_name or f"{org.name} Admin"
+        existing_org_user.password_hash = hash_password(temp_password)
+        existing_org_user.role_label = OrgRoleLabel.ADMIN
+        existing_org_user.status = OrgUserStatus.ACTIVE
+        existing_org_user.email_verification_token = generate_email_verification_token()
+        existing_org_user.totp_secret = None
+        existing_org_user.totp_enabled = False
+        org_admin = existing_org_user
+    else:
+        org_admin = OrgUser(
+            organization_id=org.id,
+            email=org.primary_contact_email,
+            name=org.primary_contact_name or f"{org.name} Admin",
+            password_hash=hash_password(temp_password),
+            role_label=OrgRoleLabel.ADMIN,
+            status=OrgUserStatus.ACTIVE,
+            email_verification_token=generate_email_verification_token(),
+        )
+        db.add(org_admin)
 
     # Generate API keys (sandbox + production)
     sandbox_full, sandbox_prefix, sandbox_hash = generate_api_key("sandbox")
@@ -240,7 +266,15 @@ async def provision_organization(
     )
     db.add(sandbox_key)
     db.add(prod_key)
-    await db.flush()
+
+    try:
+        await db.flush()
+    except IntegrityError:
+        raise ConflictError(
+            f"Email '{org.primary_contact_email}' is already in use. "
+            "Update the organization's primary_contact_email before provisioning."
+        )
+
     await db.refresh(org)
 
     email_service.send_provision_email(
