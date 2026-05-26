@@ -23,6 +23,7 @@ from app.db import get_db
 from app.dependencies import AuthContext, require_permission
 from app.models.api_key import ApiKey, ApiKeyEnvironment
 from app.models.organization import IndustryType, OrgStatus, Organization
+from app.models.permission import OrgUserRole, Role
 from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 from app.schemas.common import SuccessResponse
 from app.schemas.organization import (
@@ -209,6 +210,16 @@ async def provision_organization(
             "Update the organization profile first."
         )
 
+    # Look up the system ADMIN role — required for granting the org admin RBAC permissions
+    admin_role_result = await db.execute(
+        select(Role).where(Role.name == "ADMIN", Role.is_system == True)  # noqa: E712
+    )
+    admin_role = admin_role_result.scalar_one_or_none()
+    if not admin_role:
+        raise ValidationError(
+            "System ADMIN role not found — ensure the permission seeder has run."
+        )
+
     # Check whether the primary contact email is already an org user
     existing_user_result = await db.execute(
         select(OrgUser).where(OrgUser.email == org.primary_contact_email)
@@ -274,6 +285,26 @@ async def provision_organization(
             f"Email '{org.primary_contact_email}' is already in use. "
             "Update the organization's primary_contact_email before provisioning."
         )
+
+    # Assign the system ADMIN RBAC role so the user has full org-scoped permissions.
+    # Re-use an existing assignment if the user was previously provisioned/removed.
+    existing_rbac = (
+        await db.execute(
+            select(OrgUserRole).where(OrgUserRole.org_user_id == org_admin.id)
+        )
+    ).scalar_one_or_none()
+    if existing_rbac:
+        existing_rbac.role_id = admin_role.id
+        existing_rbac.assigned_by = _auth.user_id
+    else:
+        db.add(
+            OrgUserRole(
+                org_user_id=org_admin.id,
+                role_id=admin_role.id,
+                assigned_by=_auth.user_id,
+            )
+        )
+    await db.flush()
 
     await db.refresh(org)
 
