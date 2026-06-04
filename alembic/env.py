@@ -10,6 +10,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import get_settings
+from app.db import _normalize_async_url
 from app.db.base import Base
 
 # Import all models so Alembic discovers them
@@ -19,8 +20,9 @@ import app.models  # noqa: F401
 config = context.config
 settings = get_settings()
 
-# Override sqlalchemy.url from app settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url from app settings (coerced to the asyncpg driver so a
+# plain postgres:// URL — e.g. Railway's stock DATABASE_URL — works unchanged).
+config.set_main_option("sqlalchemy.url", _normalize_async_url(settings.database_url))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
