@@ -944,25 +944,30 @@ async def seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg) -> list:
         )
         rows_res.append(res)
 
-        # org-side human decision (ScoreDecision) — maps onto DecisionType
+        # org-side human decision (ScoreDecision) — maps onto DecisionType.
+        # REFER means "awaiting a manual decision", so it must NOT have a
+        # ScoreDecision yet — otherwise the override endpoint (which inserts
+        # one) collides on the unique score_request_id constraint. Leaving
+        # REFER open makes the override flow demoable.
         approved = decision in ("APPROVE", "CONDITIONAL_APPROVE")
-        sd = ScoreDecision(
-            score_request_id=sr.id, decision=DecisionType(decision),
-            approved_amount=(Decimal(str(round(amount * RNG.uniform(0.6, 1.0), 2)))
-                             if approved else None),
-            approved_tenure=(RNG.choice([6, 12, 18, 24]) if approved else None),
-            interest_rate=(Decimal(str(round(RNG.uniform(0.018, 0.035), 4)))
-                           if approved else None),
-            decline_reason=(None if approved else
-                            RNG.choice(["Insufficient affordability",
-                                        "Adverse bureau record",
-                                        "Failed fraud screening",
-                                        "Policy hard-stop"])),
-            decision_notes="Auto-generated demo decision",
-            decided_by_user_id=None, decided_at=scored,
-            created_at=scored, updated_at=scored,
-        )
-        rows_sd.append(sd)
+        if decision != "REFER":
+            sd = ScoreDecision(
+                score_request_id=sr.id, decision=DecisionType(decision),
+                approved_amount=(Decimal(str(round(amount * RNG.uniform(0.6, 1.0), 2)))
+                                 if approved else None),
+                approved_tenure=(RNG.choice([6, 12, 18, 24]) if approved else None),
+                interest_rate=(Decimal(str(round(RNG.uniform(0.018, 0.035), 4)))
+                               if approved else None),
+                decline_reason=(None if approved else
+                                RNG.choice(["Insufficient affordability",
+                                            "Adverse bureau record",
+                                            "Failed fraud screening",
+                                            "Policy hard-stop"])),
+                decision_notes="Auto-generated demo decision",
+                decided_by_user_id=None, decided_at=scored,
+                created_at=scored, updated_at=scored,
+            )
+            rows_sd.append(sd)
 
         # store children needing result.id
         sr._pending = (res, smeta, pd, age, dqs, fraud_flag, loan_tier, risk_tier,
