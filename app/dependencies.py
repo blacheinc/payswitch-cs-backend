@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -14,6 +15,7 @@ from app.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
     OrganizationSuspendedError,
+    RateLimitError,
 )
 from app.core.rate_limiter import RateLimiter
 from app.core.security import decode_token, hash_api_key
@@ -22,6 +24,8 @@ from app.models.api_key import ApiKey, ApiKeyStatus
 from app.models.organization import OrgStatus, Organization
 from app.models.user import AdminUser, AdminUserStatus, OrgUser, OrgUserStatus
 from app.storage.cache import get_redis_cache
+
+logger = logging.getLogger(__name__)
 
 # ── HTTP Bearer (optional – used for portal JWT auth) ─────────────────────────
 
@@ -284,14 +288,26 @@ async def check_rate_limit(
     auth: Annotated[AuthContext, Depends(get_auth_context)],
     request: Request,
 ) -> AuthContext:
-    """Enforce rate limits based on the resolved organization."""
+    """Enforce rate limits based on the resolved organization.
+
+    Fails OPEN: if Redis is unavailable, the request is allowed rather than
+    500'd. A real limit breach (``RateLimitError``) still propagates as 429.
+    """
     if auth.organization_id:
-        redis_cache = get_redis_cache()
-        client = await redis_cache.get_client()
-        limiter = RateLimiter(client)
-        rate_headers = await limiter.check_rate_limit(str(auth.organization_id))
-        # Store headers for the response
-        request.state.rate_limit_headers = rate_headers
+        try:
+            redis_cache = get_redis_cache()
+            client = await redis_cache.get_client()
+            limiter = RateLimiter(client)
+            rate_headers = await limiter.check_rate_limit(str(auth.organization_id))
+            # Store headers for the response
+            request.state.rate_limit_headers = rate_headers
+        except RateLimitError:
+            raise
+        except Exception as e:  # Redis down/slow — don't take the API down with it
+            logger.warning(
+                "Rate limiter unavailable (%s: %s) — allowing request (fail-open)",
+                type(e).__name__, e,
+            )
 
     # Expose auth context on request.state for API logging middleware
     request.state.organization_id = auth.organization_id
