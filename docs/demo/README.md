@@ -90,12 +90,17 @@ In the Railway project: **New → Database → PostgreSQL**. It exposes `PGHOST`
 On the **backend** service (Variables tab):
 
 ```
-# asyncpg driver + Railway PRIVATE networking (note the +asyncpg scheme):
-DATABASE_URL = postgresql+asyncpg://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@postgres.railway.internal:5432/${{Postgres.PGDATABASE}}
+# asyncpg driver + Railway PRIVATE networking (note the +asyncpg scheme).
+# Replace `Postgres` with the actual Postgres service name if different:
+DATABASE_URL = postgresql+asyncpg://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.PGDATABASE}}
 
-APP_ENV = production           # entrypoint runs `alembic upgrade head` on boot
+# IMPORTANT: use staging (NOT production). In production, validate_production()
+# REQUIRES the Azure Service Bus + Storage connection strings to be non-empty,
+# so blanking them under APP_ENV=production crashes the boot. staging skips that
+# check and lets the app run on the in-memory queue + DB fallback.
+APP_ENV = staging
 REDIS_URL = (leave as-is — already pointing at Railway Redis)
-JWT_SECRET_KEY = <set a real secret>
+JWT_SECRET_KEY = <set a real, non-"CHANGE-ME" secret>
 BOOTSTRAP_ADMIN_EMAIL = admin@payswitch.demo
 BOOTSTRAP_ADMIN_PASSWORD = DemoPass!2026
 BOOTSTRAP_ADMIN_NAME = Platform Administrator
@@ -108,6 +113,8 @@ CHAMPION_STORAGE_CONNECTION_STRING =
 
 > The `+asyncpg` scheme is required — Railway's stock `DATABASE_URL` is a plain
 > `postgresql://` URL and the async engine needs `postgresql+asyncpg://`.
+> A literal alternative (public proxy) also works:
+> `postgresql+asyncpg://postgres:<pw>@<host>.proxy.rlwy.net:<port>/railway`.
 
 ### 3. Deploy the code
 Push this branch (includes the `model_ops.py` champion fallback). On deploy, the
