@@ -115,6 +115,59 @@ async def model_ops_dashboard(
     except Exception as e:
         logger.warning(f"[model-ops] Failed to read champion blob: {e}")
 
+    # Fallback: when the champion blob is unavailable (e.g. object storage not
+    # configured), build the champions list from the model_versions table so
+    # the dashboard still renders. A champion is the most recently promoted (or
+    # production) version per model_type.
+    if not champions:
+        try:
+            from sqlalchemy import select
+
+            from app.models.model_version import ModelStatus, ModelVersion
+
+            rows = (
+                await db.execute(
+                    select(ModelVersion)
+                    .where(ModelVersion.status == ModelStatus.PRODUCTION)
+                    .order_by(ModelVersion.promoted_at.desc().nullslast())
+                )
+            ).scalars().all()
+
+            seen: set[str] = set()
+            for mv in rows:
+                if model_type and mv.model_type != model_type:
+                    continue
+                if mv.model_type in seen:
+                    continue
+                seen.add(mv.model_type)
+
+                current_metrics = mv.metrics or {}
+                training_auc = current_metrics.get("auc")
+                live_auc = training_auc if training_auc is not None else None
+
+                champions.append({
+                    "model_type": mv.model_type,
+                    "registry_name": f"{mv.model_type}_model",
+                    "version": str(mv.version),
+                    "status": (
+                        mv.status.value if hasattr(mv.status, "value") else mv.status
+                    ),
+                    "created_at": (
+                        mv.created_at.isoformat().replace("+00:00", "Z")
+                        if mv.created_at else None
+                    ),
+                    "promoted_at": (
+                        mv.promoted_at.isoformat().replace("+00:00", "Z")
+                        if mv.promoted_at else None
+                    ),
+                    "current_metrics": current_metrics,
+                    "live_auc": live_auc,
+                    "auc_change_pct": 0.0 if live_auc is not None else None,
+                    "auc_alert": False,
+                })
+        except Exception as e:
+            logger.warning(f"[model-ops] DB champion fallback failed: {e}")
+
     ops_data["champions"] = champions
 
     # Add AUC drop alert if applicable
