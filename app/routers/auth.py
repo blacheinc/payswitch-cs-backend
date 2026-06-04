@@ -152,8 +152,11 @@ async def login(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> LoginResponse:
     """Authenticate via email/password. Returns JWT tokens."""
+    # Emails are stored lowercase; normalize input so capitalization (e.g. a
+    # phone keyboard auto-capitalizing the first letter) doesn't break login.
+    email = (body.email or "").strip().lower()
     # Try admin first, then org user
-    result = await db.execute(select(AdminUser).where(AdminUser.email == body.email))
+    result = await db.execute(select(AdminUser).where(AdminUser.email == email))
     admin = result.scalar_one_or_none()
 
     if admin and admin.status == AdminUserStatus.ACTIVE:
@@ -204,7 +207,7 @@ async def login(
         )
 
     # Try org user
-    result = await db.execute(select(OrgUser).where(OrgUser.email == body.email))
+    result = await db.execute(select(OrgUser).where(OrgUser.email == email))
     org_user = result.scalar_one_or_none()
 
     if org_user and org_user.status == OrgUserStatus.ACTIVE:
@@ -325,9 +328,10 @@ async def forgot_password(
 ) -> SuccessResponse:
     """Request a password reset email. Token expires in 1 hour."""
     expiry = utcnow() + timedelta(hours=1)
+    email = (body.email or "").strip().lower()
 
     # Check org users first
-    result = await db.execute(select(OrgUser).where(OrgUser.email == body.email))
+    result = await db.execute(select(OrgUser).where(OrgUser.email == email))
     user = result.scalar_one_or_none()
     if user:
         user.password_reset_token = generate_email_verification_token()
@@ -340,7 +344,7 @@ async def forgot_password(
     else:
         # Check admin users
         result = await db.execute(
-            select(AdminUser).where(AdminUser.email == body.email)
+            select(AdminUser).where(AdminUser.email == email)
         )
         admin = result.scalar_one_or_none()
         if admin:
