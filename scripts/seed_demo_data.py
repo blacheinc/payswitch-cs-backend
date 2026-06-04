@@ -828,10 +828,13 @@ async def seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg) -> list:
         org = RNG.choice(active_orgs)
         users = users_by_org[org.id]
         keys = keys_by_org[org.id]
-        created = NOW - timedelta(
-            days=RNG.uniform(0, days),
-            hours=RNG.uniform(0, 23), minutes=RNG.uniform(0, 59),
-        )
+        # Bias ~20% of requests into the last 2 days so "today" / "last 24h"
+        # dashboard windows are well populated; the rest spread over the window.
+        if RNG.random() < 0.20:
+            age_days = RNG.uniform(0, 2)
+        else:
+            age_days = RNG.uniform(0, days)
+        created = NOW - timedelta(days=age_days)
         source = weighted_choice([("api", 0.6), ("web_portal", 0.25), ("bulk", 0.15)])
         applicant = rand_name()
         amount = RNG.choice([1500, 3000, 5000, 8000, 12000, 20000, 35000, 50000]) * RNG.uniform(0.8, 1.2)
@@ -1279,6 +1282,16 @@ async def main() -> int:
     parser.add_argument("--scale", choices=list(SCALES), default="medium")
     args = parser.parse_args()
     cfg = SCALES[args.scale]
+
+    # Anchor the data window to the DATABASE clock, not this host's clock.
+    # Otherwise clock skew between the seeding machine and the live server
+    # leaves the "today" / "last 24h" dashboard windows empty.
+    global NOW
+    async with async_session_factory() as _db:
+        db_now = (await _db.execute(text("SELECT now()"))).scalar()
+    if db_now is not None:
+        NOW = db_now
+        print(f"[clock] anchored data window to DB now() = {NOW.isoformat()}")
 
     await normalize_enums()
 
