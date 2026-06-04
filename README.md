@@ -80,6 +80,20 @@ uvicorn app.main:app --reload
 
 `http://localhost:8000/docs` → OpenAPI UI.
 
+### Demo data (business demo, no Azure / no live AI)
+
+To populate every dashboard with rich, realistic data without Azure or the AI
+pipeline, see [`docs/demo/README.md`](docs/demo/README.md):
+
+```bash
+docker compose up -d postgres
+.venv/bin/alembic upgrade head
+.venv/bin/python scripts/seed_demo_data.py --reset --scale medium
+```
+
+Logins: `admin@payswitch.demo` / `DemoPass!2026` (platform), `admin@gcm.com.gh`
+/ `DemoPass!2026` (org). The same script seeds Railway — see the demo doc.
+
 ### Running tests
 
 ```bash
