@@ -836,11 +836,26 @@ async def seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg) -> list:
         applicant = rand_name()
         amount = RNG.choice([1500, 3000, 5000, 8000, 12000, 20000, 35000, 50000]) * RNG.uniform(0.8, 1.2)
         tenure = RNG.choice([3, 6, 9, 12, 18, 24, 36])
+        dob = (NOW - timedelta(days=RNG.randint(22 * 365, 65 * 365))).date().isoformat()
+        # Keys match what GET /v1/score-requests/{id} reads to render the
+        # applicant + loan panels (full_name/date_of_birth/... and loan_request).
         payload = {
-            "applicant": {"name": applicant, "region": RNG.choice(REGIONS),
-                          "gender": RNG.choice(["M", "F"])},
-            "loan": {"amount_ghs": round(amount, 2), "tenure_months": tenure,
-                     "product": RNG.choice(LOAN_PRODUCTS)},
+            "applicant": {
+                "full_name": applicant,
+                "date_of_birth": dob,
+                "national_id_number": f"GHA-{RNG.randint(100000000, 999999999)}-{RNG.randint(0, 9)}",
+                "phone": f"+2332{RNG.randint(10000000, 49999999)}",
+                "account_number": str(RNG.randint(1000000000, 9999999999)),
+                "gender": RNG.choice(["male", "female"]),
+                "marital_status": RNG.choice(["single", "married"]),
+                "dependents": RNG.randint(0, 4),
+                "region": RNG.choice(REGIONS),
+            },
+            "loan_request": {
+                "amount": round(amount, 2),
+                "tenure_months": tenure,
+                "purpose": RNG.choice(LOAN_PRODUCTS),
+            },
             "identifiers": {"ghana_card_hash": short_id(24).lower()},
         }
 
@@ -910,7 +925,7 @@ async def seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg) -> list:
         grade = grade_for_score(score)
         # forced coverage first, otherwise grade-weighted mix
         decision = forced.get(sr.tracking_id) or weighted_choice(GRADE_DECISION_MIX[grade])
-        amount = sr.request_payload["loan"]["amount_ghs"]
+        amount = sr.request_payload["loan_request"]["amount"]
         (credit_risk, fraud_detection, loan_amount, income_verification,
          smeta, pd, age, dqs, fraud_flag, loan_tier, risk_tier) = build_scoring_jsons(
             score, grade, decision, amount)
@@ -985,7 +1000,7 @@ async def seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg) -> list:
                 LoanPerformanceStatus.PAID_OFF: 0,
                 LoanPerformanceStatus.WRITE_OFF: 180,
             }
-            bal = sr.request_payload["loan"]["amount_ghs"]
+            bal = sr.request_payload["loan_request"]["amount"]
             rows_lp.append(LoanPerformance(
                 score_request_id=sr.id, status=st, days_past_due=dpd_map[st],
                 outstanding_balance=Decimal(str(round(
