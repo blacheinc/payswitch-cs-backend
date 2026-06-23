@@ -60,7 +60,27 @@ async def bureau_lookup(
     _cache_lookup_id = body.identification or body.phone_number
     _cache_key_id = f"bureau:id:{_cache_lookup_id}" if _cache_lookup_id else None
 
-    if _cache_key_id:
+    # ── Demo simulation: serve a stored XDS report instead of calling XDS ──
+    from app.config import get_settings as _get_settings
+    if _get_settings().demo_simulation_mode:
+        from app.demo.simulation_records import get_simulation_report
+
+        _sim_report = get_simulation_report(body.identification, body.phone_number)
+        if _sim_report is None:
+            # Sandboxed: any ID that isn't one of the demo records → no record.
+            logger.info("[bureau-lookup] SIMULATION: no demo record for %s", _cache_lookup_id)
+            return BureauLookupResponse(
+                bureau_hit_status="NO_RECORD",
+                match_count=0,
+                features=NO_RECORD_DEFAULT_FEATURES,
+                metadata=BureauMetadata(
+                    bureau_hit_status="NO_RECORD", score_grade="F", product_source="none"
+                ),
+            )
+        logger.info("[bureau-lookup] SIMULATION hit for %s", _cache_lookup_id)
+        _cached_result = {"product_45": _sim_report, "product_49": {}}
+
+    if _cached_result is None and _cache_key_id:
         try:
             _cache = get_redis_cache()
             _cached_bytes = await _cache.get(_cache_key_id)

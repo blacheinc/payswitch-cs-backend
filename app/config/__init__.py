@@ -113,6 +113,12 @@ class Settings(BaseSettings):
     de_inference_url: str = ""
     de_inference_code: str = ""
 
+    # ── Demo simulation ──────────────────────────────────────────────────────
+    # When true, bureau-lookup and score-request serve deterministic stored
+    # answers for the five demo records (no XDS, no AI pipeline). See
+    # app/demo/simulation_records.py.
+    demo_simulation_mode: bool = False
+
     # ── Customer Service Function App ────────────────────────────────────────
     customer_service_base_url: str = ""
     customer_service_function_key: str = ""
