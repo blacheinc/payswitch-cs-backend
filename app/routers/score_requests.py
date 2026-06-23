@@ -310,6 +310,167 @@ def _build_xds_payload(
     }
 
 
+async def _write_simulated_score(
+    db,
+    auth,
+    body,
+    tracking_id: str,
+    payload_dict: dict,
+    idempotency_key: str | None,
+    outcome: dict,
+):
+    """Persist a deterministic scoring result for a demo record and return it.
+
+    Used only when ``demo_simulation_mode`` is on and the consumer id matches
+    one of the five demo records. Mirrors the synchronous hard-stop path: write
+    a COMPLETED ScoreRequest + ScoringResult + DecisionMetric, no DE/AI call.
+    """
+    from datetime import date, timedelta
+
+    from app.models.decision_metric import DecisionMetric
+    from app.models.scoring_result import ScoringDecision, ScoringResult
+
+    decision = outcome["decision"]
+    now = utcnow()
+
+    # Applicant age from DOB (for compliance fields)
+    age = None
+    try:
+        dob = body.applicant.date_of_birth
+        age = now.year - dob.year - ((now.month, now.day) < (dob.month, dob.day))
+    except Exception:
+        pass
+
+    approved = decision in ("APPROVE", "CONDITIONAL_APPROVE")
+    requested = float(body.loan_request.amount or 0)
+    rec_amount = outcome.get("recommended_amount_ghs")
+    if rec_amount is None and approved:
+        rec_amount = round(requested * (1.0 if decision == "APPROVE" else 0.6), 2)
+
+    credit_risk = {
+        "probability_of_default": outcome["probability_of_default"],
+        "pd_confidence": outcome.get("pd_confidence"),
+        "risk_tier": outcome["risk_tier"],
+        "shap_contributions": outcome.get("shap_contributions", []),
+        "decision_reason_codes": outcome.get("decision_reason_codes", []),
+        "model_version": "credit_risk_v2.0.0",
+    }
+    fraud_detection = {
+        "fraud_anomaly_score": outcome.get("fraud_anomaly_score"),
+        "fraud_risk_flag": outcome.get("fraud_risk_flag", "LOW"),
+        "model_version": "fraud_v1.0.0",
+    }
+    loan_amount = (
+        {
+            "recommended_amount_ghs": rec_amount,
+            "recommended_loan_tier": outcome.get("recommended_loan_tier"),
+            "model_version": "loan_v1.0.0",
+        }
+        if approved
+        else None
+    )
+    income_verification = {
+        "income_tier": outcome.get("income_tier"),
+        "income_tier_label": outcome.get("income_tier_label"),
+        "income_confidence": outcome.get("income_confidence"),
+        "model_version": "income_v1.0.0",
+    }
+    scoring_metadata = {
+        "credit_score": outcome["credit_score"],
+        "score_grade": outcome["score_grade"],
+        "data_quality_score": outcome.get("data_quality_score"),
+        "bureau_hit_status": "HIT",
+        "product_source": "45",
+        "applicant_age_at_application": str(age) if age is not None else None,
+        "decline_reasons": outcome.get("decline_reasons"),
+    }
+
+    source = (
+        RequestSource.API if auth.user_type == "api_key" else RequestSource.WEB_PORTAL
+    )
+    score_req = ScoreRequest(
+        tracking_id=tracking_id,
+        organization_id=auth.organization_id,
+        reference_id=body.reference_id,
+        status=ScoreRequestStatus.COMPLETED,
+        request_source=source,
+        request_payload=payload_dict,
+        idempotency_key=idempotency_key,
+        api_key_id=auth.api_key.id if auth.api_key else None,
+        created_by_user_id=auth.user_id,
+        score_value=outcome["credit_score"],
+        risk_category=outcome["risk_tier"],
+        confidence=outcome.get("pd_confidence"),
+        model_version="credit_risk_v2.0.0",
+        processing_time_ms=1200,
+        scored_at=now,
+        valid_until=now + timedelta(days=14),
+    )
+    db.add(score_req)
+    await db.flush()
+
+    scoring_result = ScoringResult(
+        request_id=tracking_id,
+        score_request_id=score_req.id,
+        scoring_timestamp=now,
+        decision=ScoringDecision(decision),
+        condition_applied=outcome.get("conditions", []),
+        credit_risk=credit_risk,
+        fraud_detection=fraud_detection,
+        loan_amount=loan_amount,
+        income_verification=income_verification,
+        scoring_metadata=scoring_metadata,
+        errors=None,
+    )
+    db.add(scoring_result)
+    await db.flush()
+
+    db.add(DecisionMetric(
+        scoring_result_id=scoring_result.id,
+        decision=decision,
+        credit_score=outcome["credit_score"],
+        score_grade=outcome["score_grade"],
+        risk_tier=outcome["risk_tier"],
+        fraud_flag=outcome.get("fraud_risk_flag"),
+        loan_tier=outcome.get("recommended_loan_tier") if approved else None,
+        probability_of_default=outcome["probability_of_default"],
+        data_quality_score=outcome.get("data_quality_score"),
+        applicant_age=age,
+        has_explainability=bool(outcome.get("shap_contributions")),
+        timestamp=now,
+    ))
+
+    resp = ScoreRequestResponse(
+        request_id=tracking_id,
+        reference_id=body.reference_id,
+        status=ScoreRequestStatus.COMPLETED.value,
+        applicant=ApplicantSummary(
+            full_name=body.applicant.full_name,
+            date_of_birth=str(body.applicant.date_of_birth),
+            national_id_number=body.applicant.national_id_number,
+            phone=body.applicant.phone,
+            account_number=body.applicant.account_number,
+        ),
+        loan_request=LoanRequestSummary(
+            amount=body.loan_request.amount,
+            tenure_months=body.loan_request.tenure_months,
+            purpose=body.loan_request.purpose,
+        ),
+        scoring_result=scoring_result,
+        timestamps={
+            "requested_at": now.isoformat(),
+            "scored_at": now.isoformat(),
+        },
+    )
+    if idempotency_key:
+        try:
+            cache = get_redis_cache()
+            await cache.set_idempotency(idempotency_key, resp.model_dump(mode="json"))
+        except Exception:
+            pass
+    return resp
+
+
 @router.post(
     "",
     response_model=ScoreRequestResponse | HardStopDeclineResponse,
@@ -361,6 +522,21 @@ async def create_score_request(
     consumer_id: str | None = (
         body.bureau_data.consumer_id if body.bureau_data else None
     )
+
+    # ── Demo simulation: deterministic result for the five demo records ──
+    from app.config import get_settings as _gs
+    if _gs().demo_simulation_mode and consumer_id:
+        from app.demo.simulation_records import get_outcome_by_consumer_id
+
+        _sim_outcome = get_outcome_by_consumer_id(consumer_id)
+        if _sim_outcome is not None:
+            logger.info("[scoring] SIMULATION result for %s → %s",
+                        tracking_id, _sim_outcome["decision"])
+            return await _write_simulated_score(
+                db, auth, body, tracking_id, payload_dict,
+                idempotency_key, _sim_outcome,
+            )
+
     if consumer_id:
         try:
             _cache = _get_redis_cache()

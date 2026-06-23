@@ -1280,6 +1280,12 @@ async def main() -> int:
     parser.add_argument("--reset", action="store_true",
                         help="Truncate demo tables before seeding")
     parser.add_argument("--scale", choices=list(SCALES), default="medium")
+    parser.add_argument(
+        "--minimal", action="store_true",
+        help="Seed only logins + config (orgs, users, keys, RBAC, models, data "
+             "sources) and NO score history. For the live demo, so the only "
+             "score requests are the ones run through the 5 simulation records.",
+    )
     args = parser.parse_args()
     cfg = SCALES[args.scale]
 
@@ -1319,14 +1325,22 @@ async def main() -> int:
         await db.commit()
         print("[rbac] roles + permissions seeded and assigned to demo users.")
 
-        await seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg)
-        await db.commit()
+        if args.minimal:
+            # Logins + config only — no score history. The 5 simulation records
+            # run live during the demo become the only score requests.
+            await seed_alerts(db)
+            await db.commit()
+            print("[minimal] logins + models + data sources + alerts seeded; "
+                  "score history intentionally empty.")
+        else:
+            await seed_score_requests(db, orgs, users_by_org, keys_by_org, cfg)
+            await db.commit()
 
-        await seed_batch_jobs(db, orgs, users_by_org)
-        await seed_request_metrics(db, orgs, keys_by_org, cfg)
-        await seed_alerts(db)
-        await seed_audit_logs(db, admins, orgs)
-        await db.commit()
+            await seed_batch_jobs(db, orgs, users_by_org)
+            await seed_request_metrics(db, orgs, keys_by_org, cfg)
+            await seed_alerts(db)
+            await seed_audit_logs(db, admins, orgs)
+            await db.commit()
 
     print("\n[done] Demo data seeded.")
     print(f"  Admin login : admin@payswitch.demo / {DEMO_PASSWORD}")
