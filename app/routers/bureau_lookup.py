@@ -62,8 +62,17 @@ async def bureau_lookup(
 
     # ── Demo simulation: serve a stored XDS report instead of calling XDS ──
     from app.config import get_settings as _get_settings
-    if _get_settings().demo_simulation_mode:
+    _settings = _get_settings()
+    if _settings.demo_simulation_mode:
+        import asyncio as _asyncio
+        import random as _random
+
         from app.demo.simulation_records import get_simulation_report
+
+        # Feel like a real bureau call rather than an instant lookup.
+        _delay = max(0.0, _settings.demo_bureau_delay_seconds + _random.uniform(-0.4, 0.6))
+        if _delay:
+            await _asyncio.sleep(_delay)
 
         _sim_report = get_simulation_report(body.identification, body.phone_number)
         if _sim_report is None:

@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # answers for the five demo records (no XDS, no AI pipeline). See
     # app/demo/simulation_records.py.
     demo_simulation_mode: bool = False
+    # Artificial latency (seconds) so the simulated flow feels real rather than
+    # instant. Applied only in simulation mode; a small jitter is added on top.
+    demo_bureau_delay_seconds: float = 2.0
+    demo_scoring_delay_seconds: float = 5.0
 
     # ── Customer Service Function App ────────────────────────────────────────
     customer_service_base_url: str = ""
