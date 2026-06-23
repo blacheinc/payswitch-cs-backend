@@ -325,10 +325,18 @@ async def _write_simulated_score(
     one of the five demo records. Mirrors the synchronous hard-stop path: write
     a COMPLETED ScoreRequest + ScoringResult + DecisionMetric, no DE/AI call.
     """
+    import asyncio as _asyncio
+    import random as _random
     from datetime import date, timedelta
 
+    from app.config import get_settings as _gs
     from app.models.decision_metric import DecisionMetric
     from app.models.scoring_result import ScoringDecision, ScoringResult
+
+    # Feel like a real multi-model scoring pass rather than an instant answer.
+    _delay = max(0.0, _gs().demo_scoring_delay_seconds + _random.uniform(-0.6, 1.2))
+    if _delay:
+        await _asyncio.sleep(_delay)
 
     decision = outcome["decision"]
     now = utcnow()
