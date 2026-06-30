@@ -105,9 +105,7 @@ def evaluate_hard_stops(
         )
 
     if not result.passed:
-        logger.info(
-            f"[HardStop] DECLINED — rules triggered: {result.triggered_rules}"
-        )
+        logger.info(f"[HardStop] DECLINED — rules triggered: {result.triggered_rules}")
     else:
         logger.debug("[HardStop] All checks passed")
 

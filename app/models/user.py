@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import enum
+from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -15,13 +17,13 @@ if TYPE_CHECKING:
     from app.models.organization import Organization
 
 
-class AdminRole(str, enum.Enum):
+class AdminRole(enum.StrEnum):
     SUPER_ADMIN = "super_admin"
     DATA_SCIENCE = "data_science"
     OPERATIONS = "operations"
 
 
-class AdminUserStatus(str, enum.Enum):
+class AdminUserStatus(enum.StrEnum):
     ACTIVE = "active"
     DEACTIVATED = "deactivated"
 
@@ -31,15 +33,11 @@ class AdminUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "admin_users"
 
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
-    )
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[AdminRole] = mapped_column(
-        Enum(
-            AdminRole, name="admin_role", values_callable=lambda x: [e.value for e in x]
-        ),
+        Enum(AdminRole, name="admin_role", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
     )
     status: Mapped[AdminUserStatus] = mapped_column(
@@ -53,22 +51,22 @@ class AdminUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     totp_secret: Mapped[str | None] = mapped_column(String(32))
     totp_enabled: Mapped[bool] = mapped_column(default=False)
-    last_login_at: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_reset_token: Mapped[str | None] = mapped_column(String(64))
-    password_reset_expires: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def __repr__(self) -> str:
         return f"<AdminUser {self.email} ({self.role.value})>"
 
 
-class OrgUserStatus(str, enum.Enum):
+class OrgUserStatus(enum.StrEnum):
     PENDING = "pending"
     ACTIVE = "active"
     SUSPENDED = "suspended"
     REMOVED = "removed"
 
 
-class OrgRoleLabel(str, enum.Enum):
+class OrgRoleLabel(enum.StrEnum):
     """Labels only – no access restrictions enforced (per PRD)."""
 
     ADMIN = "admin"
@@ -82,12 +80,10 @@ class OrgUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "org_users"
 
-    organization_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    organization_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
     )
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
-    )
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)
     role_label: Mapped[OrgRoleLabel] = mapped_column(
@@ -110,13 +106,13 @@ class OrgUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     totp_secret: Mapped[str | None] = mapped_column(String(32))
     totp_enabled: Mapped[bool] = mapped_column(default=False)
-    last_login_at: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     email_verification_token: Mapped[str | None] = mapped_column(String(64))
     password_reset_token: Mapped[str | None] = mapped_column(String(64))
-    password_reset_expires: Mapped[str | None] = mapped_column(DateTime(timezone=True))
+    password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    organization: Mapped["Organization"] = relationship(back_populates="users")
+    organization: Mapped[Organization] = relationship(back_populates="users")
 
     def __repr__(self) -> str:
         return f"<OrgUser {self.email} org={self.organization_id}>"

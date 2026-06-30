@@ -20,9 +20,9 @@ import httpx
 
 sys.path.append(os.getcwd())
 
-BASE_URL = "http://localhost:8000"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 G = "\033[92m"
 R = "\033[91m"
@@ -59,7 +59,6 @@ async def main():
     print(f"{B}{'═' * 60}{X}")
 
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as c:
-
         # ── Login ────────────────────────────────────────────────────
         section("Admin Login")
         r = await c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS})
@@ -77,13 +76,19 @@ async def main():
             ok("Champion metadata returned")
             show("updated_at", d.get("updated_at"))
             for m in d.get("models", []):
-                show(f"model: {m['model_type']}", {
-                    "version": m.get("version"),
-                    "status": m.get("status"),
-                    "metrics": m.get("metrics"),
-                })
+                show(
+                    f"model: {m['model_type']}",
+                    {
+                        "version": m.get("version"),
+                        "status": m.get("status"),
+                        "metrics": m.get("metrics"),
+                    },
+                )
         elif r.status_code == 404:
-            ok("404 — no training run completed yet (expected on fresh env)", r.json().get("detail", ""))
+            ok(
+                "404 — no training run completed yet (expected on fresh env)",
+                r.json().get("detail", ""),
+            )
         else:
             fail("Unexpected response", f"status={r.status_code}  body={r.text[:300]}")
 
@@ -110,7 +115,10 @@ async def main():
             show("fraud_detection", d.get("fraud_detection"))
             show("loan_amount", d.get("loan_amount"))
         elif r.status_code == 502:
-            ok("502 — orchestrator unreachable (expected if not deployed)", r.json().get("detail", ""))
+            ok(
+                "502 — orchestrator unreachable (expected if not deployed)",
+                r.json().get("detail", ""),
+            )
         else:
             fail("Unexpected response", f"status={r.status_code}  body={r.text[:300]}")
 
@@ -125,11 +133,14 @@ async def main():
         show("generated_at", d.get("generated_at"))
         show("request_volume.total", d["request_volume"]["total"])
         show("request_volume.by_endpoint", d["request_volume"]["by_endpoint"][:3])
-        show("latency", {
-            "p50_ms": d["latency"]["p50_ms"],
-            "p95_ms": d["latency"]["p95_ms"],
-            "p99_ms": d["latency"]["p99_ms"],
-        })
+        show(
+            "latency",
+            {
+                "p50_ms": d["latency"]["p50_ms"],
+                "p95_ms": d["latency"]["p95_ms"],
+                "p99_ms": d["latency"]["p99_ms"],
+            },
+        )
         show("error_rates.overall_pct", d["error_rates"]["overall_pct"])
         show("timeseries buckets", len(d.get("timeseries", [])))
         show("alerts", d.get("alerts"))
@@ -143,18 +154,24 @@ async def main():
         ok("Risk dashboard returned 200")
         show("period", d.get("period"))
         oa = d["approval_rates"]["overall"]
-        show("overall approval rates", {
-            "total_decisions": oa["total_decisions"],
-            "approve_rate_pct": oa["approve_rate_pct"],
-            "decline_rate_pct": oa["decline_rate_pct"],
-            "conditional_approve_rate_pct": oa["conditional_approve_rate_pct"],
-        })
+        show(
+            "overall approval rates",
+            {
+                "total_decisions": oa["total_decisions"],
+                "approve_rate_pct": oa["approve_rate_pct"],
+                "decline_rate_pct": oa["decline_rate_pct"],
+                "conditional_approve_rate_pct": oa["conditional_approve_rate_pct"],
+            },
+        )
         show("approval_rates.by_grade", d["approval_rates"]["by_grade"])
-        show("score_distribution", {
-            "mean": d["score_distribution"]["mean"],
-            "median": d["score_distribution"]["median"],
-            "std_dev": d["score_distribution"]["std_dev"],
-        })
+        show(
+            "score_distribution",
+            {
+                "mean": d["score_distribution"]["mean"],
+                "median": d["score_distribution"]["median"],
+                "std_dev": d["score_distribution"]["std_dev"],
+            },
+        )
         show("risk_tier_breakdown", d.get("risk_tier_breakdown"))
         show("timeseries buckets", len(d.get("timeseries", [])))
         show("alerts", d.get("alerts"))
@@ -167,16 +184,19 @@ async def main():
         d = r.json()
         ok("Model-ops dashboard returned 200")
         show("period", d.get("period"))
-        show("champions", [
-            {
-                "model_type": m.get("model_type"),
-                "version": m.get("version"),
-                "status": m.get("status"),
-                "live_auc": m.get("live_auc"),
-                "auc_change_pct": m.get("auc_change_pct"),
-            }
-            for m in d.get("champions", [])
-        ])
+        show(
+            "champions",
+            [
+                {
+                    "model_type": m.get("model_type"),
+                    "version": m.get("version"),
+                    "status": m.get("status"),
+                    "live_auc": m.get("live_auc"),
+                    "auc_change_pct": m.get("auc_change_pct"),
+                }
+                for m in d.get("champions", [])
+            ],
+        )
         show("feature_drift", d.get("feature_drift"))
         show("retraining_history", d.get("retraining_history", [])[:3])
         show("score_distribution_psi", d.get("score_distribution_psi"))
@@ -190,10 +210,14 @@ async def main():
         d = r.json()
         ok("Compliance dashboard returned 200")
         show("period", d.get("period"))
-        show("fairness — approval_rate_by_age_group",
-             d["fairness_metrics"]["demographic_parity"]["approval_rate_by_age_group"])
-        show("fairness — max_disparity_pct",
-             d["fairness_metrics"]["demographic_parity"]["max_disparity_pct"])
+        show(
+            "fairness — approval_rate_by_age_group",
+            d["fairness_metrics"]["demographic_parity"]["approval_rate_by_age_group"],
+        )
+        show(
+            "fairness — max_disparity_pct",
+            d["fairness_metrics"]["demographic_parity"]["max_disparity_pct"],
+        )
         show("audit_log", d.get("audit_log"))
         show("data_subject_requests", d.get("data_subject_requests"))
         show("alerts", d.get("alerts"))

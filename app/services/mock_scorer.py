@@ -7,8 +7,8 @@ replaced by calls to the AI team's model-serving microservice.
 from __future__ import annotations
 
 import hashlib
-import random
-from datetime import datetime, timedelta, timezone
+import secrets
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.schemas.score_request import (
@@ -60,7 +60,7 @@ def generate_mock_score(
     """Generate a complete mock score response matching the PRD schema."""
     score_value = _deterministic_score(request_payload)
     risk_cat, risk_desc = _risk_category(score_value)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Generate score components
     base = score_value / 850
@@ -145,14 +145,12 @@ def generate_mock_score(
     loan_request = request_payload.get("loan_request", {})
     loan_amount = loan_request.get("amount", 10000)
     tenure_months = loan_request.get("tenure_months", 12)
-    monthly_income = (request_payload.get("employment") or {}).get(
-        "monthly_income", 0
-    ) or 5000
+    monthly_income = (request_payload.get("employment") or {}).get("monthly_income", 0) or 5000
     monthly_payment = loan_amount / max(tenure_months, 1) * 1.15  # Rough estimate
 
     affordability = AffordabilityAssessment(
         estimated_monthly_payment=round(monthly_payment, 2),
-        debt_to_income_current=round(random.uniform(0.1, 0.4), 4),
+        debt_to_income_current=round(secrets.SystemRandom().uniform(0.1, 0.4), 4),
         debt_to_income_projected=round(monthly_payment / max(monthly_income, 1), 4),
         disposable_income=round(monthly_income * 0.6, 2),
         affordability_assessment=(

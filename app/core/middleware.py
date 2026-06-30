@@ -34,9 +34,7 @@ async def _run_infra_alerts() -> None:
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Inject a unique request ID and persist API logs for /v1/ routes."""
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         request.state.request_id = request_id
 
@@ -50,9 +48,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         # Record org-agnostic request metrics for infrastructure dashboard
         try:
-            await self._persist_request_metric(
-                request, response, request_id, response_time_ms
-            )
+            await self._persist_request_metric(request, response, request_id, response_time_ms)
         except Exception:
             logger.warning("Failed to persist request metric", exc_info=True)
 
@@ -60,9 +56,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if path.startswith("/v1/") or path.startswith("/admin/"):
             try:
-                await self._persist_api_log(
-                    request, response, request_id, response_time_ms
-                )
+                await self._persist_api_log(request, response, request_id, response_time_ms)
             except Exception:
                 logger.warning("Failed to persist API log", exc_info=True)
 
@@ -141,4 +135,3 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             )
             session.add(log_entry)
             await session.commit()
-

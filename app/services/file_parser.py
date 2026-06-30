@@ -72,8 +72,7 @@ def parse_file(file_bytes: bytes, file_name: str) -> ParseResult:
     parser = parser_map.get(ext)
     if not parser:
         raise ValueError(
-            f"Unsupported file format '.{ext}'. "
-            f"Accepted formats: {', '.join(parser_map.keys())}"
+            f"Unsupported file format '.{ext}'. Accepted formats: {', '.join(parser_map.keys())}"
         )
 
     try:
@@ -191,8 +190,7 @@ def _parse_json(data: bytes) -> ParseResult:
     columns = list(all_keys.keys())
 
     sample_rows = [
-        [str(record.get(col, "")) for col in columns]
-        for record in flat_records[:SAMPLE_ROW_COUNT]
+        [str(record.get(col, "")) for col in columns] for record in flat_records[:SAMPLE_ROW_COUNT]
     ]
 
     return ParseResult(
@@ -248,9 +246,7 @@ def _clean_column_name(name: str) -> str:
     return str(name).strip().lower().replace(" ", "_")
 
 
-def _flatten_dict(
-    d: dict[str, Any], parent_key: str = "", sep: str = "_"
-) -> dict[str, Any]:
+def _flatten_dict(d: dict[str, Any], parent_key: str = "", sep: str = "_") -> dict[str, Any]:
     """Flatten nested dict: {"customer": {"age": 35}} → {"customer_age": 35}."""
     items: list[tuple[str, Any]] = []
     for k, v in d.items():

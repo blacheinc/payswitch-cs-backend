@@ -7,16 +7,15 @@ before evaluating hard-stop rules.
 """
 
 import copy
-from datetime import date
-from typing import Any
+from typing import Any, cast
 
 
-def _get_or_create(d: dict, *keys: str) -> dict:
+def _get_or_create(d: dict[str, Any], *keys: str) -> dict[str, Any]:
     curr = d
     for k in keys:
         if k not in curr or not isinstance(curr[k], dict):
             curr[k] = {}
-        curr = curr[k]
+        curr = cast(dict[str, Any], curr[k])
     return curr
 
 
@@ -27,19 +26,22 @@ def apply_feature_overrides(raw_xds: dict[str, Any], features: dict[str, Any]) -
     p45 = out.get("product_45") or {}
     p49 = out.get("product_49") or {}
 
-    def _first_or_empty(arr_key: str) -> dict:
+    def _first_or_empty(arr_key: str) -> dict[str, Any]:
         arr = p45.get(arr_key)
         if isinstance(arr, list) and arr:
             if not isinstance(arr[0], dict):
                 arr[0] = {}
-            return arr[0]
+            return cast(dict[str, Any], arr[0])
         else:
-            new_obj = {}
+            new_obj: dict[str, Any] = {}
             p45[arr_key] = [new_obj]
             return new_obj
 
     # 1. highest_delinquency_rating (raw 0–4 integer)
-    if "highest_delinquency_rating" in features and features["highest_delinquency_rating"] is not None:
+    if (
+        "highest_delinquency_rating" in features
+        and features["highest_delinquency_rating"] is not None
+    ):
         del_obj = _get_or_create(p45, "highestDelinquencyRating")
         del_obj["highestDelinquencyRating"] = str(features["highest_delinquency_rating"])
 
@@ -56,20 +58,30 @@ def apply_feature_overrides(raw_xds: dict[str, Any], features: dict[str, Any]) -
     # 4. has_employer_detail (raw employer string)
     if "has_employer_detail" in features:
         pd_obj = _get_or_create(p45, "personalDetailsSummary")
-        pd_obj["employerDetail"] = str(features["has_employer_detail"]) if features["has_employer_detail"] else ""
+        pd_obj["employerDetail"] = (
+            str(features["has_employer_detail"]) if features["has_employer_detail"] else ""
+        )
 
     # 5. identity_verified (raw nationalIDNo string)
     if "identity_verified" in features:
         pd_obj = _get_or_create(p45, "personalDetailsSummary")
-        pd_obj["nationalIDNo"] = str(features["identity_verified"]) if features["identity_verified"] else ""
+        pd_obj["nationalIDNo"] = (
+            str(features["identity_verified"]) if features["identity_verified"] else ""
+        )
 
     # 6. Credit Account Summary — raw GHS amounts and counts
     ca_obj = _get_or_create(p45, "creditAccountSummary")
 
-    if "total_outstanding_debt_ghs" in features and features["total_outstanding_debt_ghs"] is not None:
+    if (
+        "total_outstanding_debt_ghs" in features
+        and features["total_outstanding_debt_ghs"] is not None
+    ):
         ca_obj["totalOutstandingdebtGHS"] = str(features["total_outstanding_debt_ghs"])
 
-    if "total_monthly_instalment_ghs" in features and features["total_monthly_instalment_ghs"] is not None:
+    if (
+        "total_monthly_instalment_ghs" in features
+        and features["total_monthly_instalment_ghs"] is not None
+    ):
         ca_obj["totalMonthlyInstalmentGHS"] = str(features["total_monthly_instalment_ghs"])
 
     if "num_active_accounts" in features and features["num_active_accounts"] is not None:
@@ -91,7 +103,11 @@ def apply_feature_overrides(raw_xds: dict[str, Any], features: dict[str, Any]) -
         ca_obj["totalNumberofJudgementGHS"] = str(features["has_judgement"])
 
     # Account status codes (bool presence checks)
-    if "has_written_off" in features or "has_charged_off" in features or "has_legal_handover" in features:
+    if (
+        "has_written_off" in features
+        or "has_charged_off" in features
+        or "has_legal_handover" in features
+    ):
         agr = _first_or_empty("creditAgreementSummary")
         if features.get("has_written_off"):
             agr["accountStatusCode"] = "W"
@@ -123,7 +139,10 @@ def apply_feature_overrides(raw_xds: dict[str, Any], features: dict[str, Any]) -
         if "mobile_max_loan_ghs" in features and features["mobile_max_loan_ghs"] is not None:
             ca49_obj["highestAmountTaken"] = str(features["mobile_max_loan_ghs"])
 
-        if "mobile_loan_history_count" in features and features["mobile_loan_history_count"] is not None:
+        if (
+            "mobile_loan_history_count" in features
+            and features["mobile_loan_history_count"] is not None
+        ):
             count = int(features["mobile_loan_history_count"])
             p49["detailedFacilityInfo"] = [{"accountStatusCode": "C"} for _ in range(count)]
 

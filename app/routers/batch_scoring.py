@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -28,10 +28,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.db.base import utcnow
 from app.dependencies import AuthContext, require_any_permission, require_permission
-from app.services.cross_org_access import resolve_org_filter
 from app.models.batch_job_item import BatchJobItem, BatchJobItemStatus
 from app.models.bulk_job import BulkJobStatus, BulkScoringJob
 from app.schemas.batch_scoring import BatchScoreRequest
+from app.services.cross_org_access import resolve_org_filter
 from app.workers.batch_worker import QUEUE_KEY
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,7 @@ async def submit_batch_job(
     personal details as a bureau lookup (full_name/identification + date_of_birth).
     Returns immediately with a job_id — poll GET /v1/score/batch/{job_id} for progress.
     """
-    job_id = (
-        f"BATCH-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-        f"-{uuid.uuid4().hex[:8].upper()}"
-    )
+    job_id = f"BATCH-{datetime.now(UTC).strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
     requested_at = utcnow()
 
     job = BulkScoringJob(
@@ -148,7 +145,8 @@ async def list_batch_jobs(
     to a specific org, or omit it for cross-org platform visibility.
     """
     org_filter = await resolve_org_filter(
-        db, auth,
+        db,
+        auth,
         requested_org_id=organization_id,
         admin_permission="admin.batch_scoring.read",
         resource_type="batch_scoring",
@@ -169,17 +167,19 @@ async def list_batch_jobs(
         except ValueError:
             pass  # ignore unknown status values
 
-    total = (
-        await db.execute(select(func.count()).select_from(q.subquery()))
-    ).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
 
     jobs = (
-        await db.execute(
-            q.order_by(BulkScoringJob.created_at.desc())
-             .offset((page - 1) * page_size)
-             .limit(page_size)
+        (
+            await db.execute(
+                q.order_by(BulkScoringJob.created_at.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return JSONResponse(
         status_code=200,
@@ -226,13 +226,13 @@ async def get_batch_job_status(
     ).all()
     counts = {row[0]: row[1] for row in count_rows}
 
-    pending    = counts.get(BatchJobItemStatus.PENDING, 0)
+    pending = counts.get(BatchJobItemStatus.PENDING, 0)
     processing = counts.get(BatchJobItemStatus.PROCESSING, 0)
-    completed  = counts.get(BatchJobItemStatus.COMPLETED, 0)
-    failed     = counts.get(BatchJobItemStatus.FAILED, 0)
-    cancelled  = counts.get(BatchJobItemStatus.CANCELLED, 0)
-    total      = job.total_records or 0
-    done       = completed + failed + cancelled
+    completed = counts.get(BatchJobItemStatus.COMPLETED, 0)
+    failed = counts.get(BatchJobItemStatus.FAILED, 0)
+    cancelled = counts.get(BatchJobItemStatus.CANCELLED, 0)
+    total = job.total_records or 0
+    done = completed + failed + cancelled
 
     progress_pct = round(done / total * 100) if total > 0 else 0
 
@@ -253,12 +253,10 @@ async def get_batch_job_status(
             "organization": _job_org_summary(job),
             "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
             "started_at": (
-                job.started_at.isoformat().replace("+00:00", "Z")
-                if job.started_at else None
+                job.started_at.isoformat().replace("+00:00", "Z") if job.started_at else None
             ),
             "completed_at": (
-                job.completed_at.isoformat().replace("+00:00", "Z")
-                if job.completed_at else None
+                job.completed_at.isoformat().replace("+00:00", "Z") if job.completed_at else None
             ),
         },
     )
@@ -308,17 +306,17 @@ async def get_batch_results(
         except ValueError:
             pass
 
-    total = (
-        await db.execute(select(func.count()).select_from(q.subquery()))
-    ).scalar() or 0
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
 
     items = (
-        await db.execute(
-            q.order_by(BatchJobItem.index)
-             .offset((page - 1) * page_size)
-             .limit(page_size)
+        (
+            await db.execute(
+                q.order_by(BatchJobItem.index).offset((page - 1) * page_size).limit(page_size)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return JSONResponse(
         status_code=200,
@@ -371,13 +369,17 @@ async def cancel_batch_job(
 
     # Cancel all pending items in bulk
     pending_items = (
-        await db.execute(
-            select(BatchJobItem).where(
-                BatchJobItem.batch_job_id == job.id,
-                BatchJobItem.status == BatchJobItemStatus.PENDING,
+        (
+            await db.execute(
+                select(BatchJobItem).where(
+                    BatchJobItem.batch_job_id == job.id,
+                    BatchJobItem.status == BatchJobItemStatus.PENDING,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     cancelled_count = 0
     for item in pending_items:
@@ -389,7 +391,9 @@ async def cancel_batch_job(
 
     logger.info(
         "[batch] Job %s cancelled by %s — %d pending items cancelled",
-        job_id, auth.user_id or "api_key", cancelled_count,
+        job_id,
+        auth.user_id or "api_key",
+        cancelled_count,
     )
 
     return JSONResponse(
@@ -449,16 +453,18 @@ async def _resolve_batch_job_for_caller(
     if auth.user_type == "admin":
         from app.models.audit import AuditLog
 
-        db.add(AuditLog(
-            actor_type="admin",
-            actor_id=str(auth.user_id) if auth.user_id else None,
-            actor_email=auth.user_email,
-            organization_id=str(job.organization_id) if job.organization_id else None,
-            action="batch_scoring.read_cross_org",
-            resource_type="batch_scoring",
-            resource_id=job_id,
-            description=f"Admin viewed batch job {job_id}",
-        ))
+        db.add(
+            AuditLog(
+                actor_type="admin",
+                actor_id=str(auth.user_id) if auth.user_id else None,
+                actor_email=auth.user_email,
+                organization_id=str(job.organization_id) if job.organization_id else None,
+                action="batch_scoring.read_cross_org",
+                resource_type="batch_scoring",
+                resource_id=job_id,
+                description=f"Admin viewed batch job {job_id}",
+            )
+        )
 
     return job
 
@@ -500,8 +506,7 @@ def _job_list_item(job: BulkScoringJob) -> dict:
         "organization": _job_org_summary(job),
         "requested_at": job.created_at.isoformat().replace("+00:00", "Z"),
         "completed_at": (
-            job.completed_at.isoformat().replace("+00:00", "Z")
-            if job.completed_at else None
+            job.completed_at.isoformat().replace("+00:00", "Z") if job.completed_at else None
         ),
     }
 
@@ -516,7 +521,6 @@ def _item_result(item: BatchJobItem) -> dict:
         "error_message": item.error_message,
         "payload": item.payload,
         "completed_at": (
-            item.completed_at.isoformat().replace("+00:00", "Z")
-            if item.completed_at else None
+            item.completed_at.isoformat().replace("+00:00", "Z") if item.completed_at else None
         ),
     }

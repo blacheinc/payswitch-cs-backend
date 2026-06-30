@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
@@ -70,7 +71,7 @@ def _build_upload_response(upload: TrainingUpload) -> TrainingUploadResponse:
 async def upload_training_data(
     file: Annotated[UploadFile, File(description="Training data file")],
     source_id: Annotated[str, Form(description="Data source UUID")],
-    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
+    auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> TrainingUploadResponse:
     """Upload a bank data file for mapping and training.
@@ -114,7 +115,7 @@ async def upload_training_data(
         file_format=file_format,
         file_size_bytes=len(file_bytes),
         raw_file_path=raw_path,
-        uploaded_by_id=admin.id,
+        uploaded_by_id=auth.user_id,
     )
     db.add(upload)
     await db.flush()
@@ -139,15 +140,6 @@ async def upload_training_data(
         upload.error_message = str(e)
         await db.flush()
         raise ValidationError(str(e))
-
-    # Check for existing mapping template
-    template_result = await db.execute(
-        select(MappingTemplate).where(
-            MappingTemplate.data_source_id == source.id,
-            MappingTemplate.is_active == True,  # noqa: E712
-        )
-    )
-    active_template = template_result.scalar_one_or_none()
 
     # Publish Service Bus event for Data Quality Agent
     try:
@@ -199,9 +191,7 @@ async def list_uploads(
 
     if status_filter:
         query = query.where(TrainingUpload.status == UploadStatus(status_filter))
-        count_query = count_query.where(
-            TrainingUpload.status == UploadStatus(status_filter)
-        )
+        count_query = count_query.where(TrainingUpload.status == UploadStatus(status_filter))
     if source_id:
         query = query.where(TrainingUpload.data_source_id == source_id)
         count_query = count_query.where(TrainingUpload.data_source_id == source_id)
@@ -248,9 +238,7 @@ async def get_upload_status(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusResponse:
     """Lightweight status poll for frontend."""
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
@@ -274,9 +262,7 @@ async def get_mapping(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MappingResultResponse:
     """Get field mappings + sample data for admin review."""
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
@@ -289,26 +275,20 @@ async def get_mapping(
 
     # Generate warnings
     warnings: list[str] = []
-    mapped_targets = [
-        m.target_feature for m in mappings if m.target_feature != "_unmapped"
-    ]
+    mapped_targets = [m.target_feature for m in mappings if m.target_feature != "_unmapped"]
     features_mapped = len(set(mapped_targets))
 
     has_target = TARGET_VARIABLE in mapped_targets
     if not has_target:
         warnings.append(
-            f"Target variable '{TARGET_VARIABLE}' is not mapped. "
-            "This is mandatory for training."
+            f"Target variable '{TARGET_VARIABLE}' is not mapped. This is mandatory for training."
         )
     if features_mapped < MIN_FEATURES_MAPPED:
         warnings.append(
-            f"Only {features_mapped} of 18 features mapped "
-            f"(minimum: {MIN_FEATURES_MAPPED})."
+            f"Only {features_mapped} of 18 features mapped (minimum: {MIN_FEATURES_MAPPED})."
         )
     if upload.record_count and upload.record_count < MIN_RECORD_COUNT:
-        warnings.append(
-            f"Only {upload.record_count} records (minimum: {MIN_RECORD_COUNT})."
-        )
+        warnings.append(f"Only {upload.record_count} records (minimum: {MIN_RECORD_COUNT}).")
 
     # Get sample data from file_metadata
     sample_data = None
@@ -334,21 +314,18 @@ async def get_mapping(
 async def update_mapping(
     upload_id: str,
     body: UpdateMappingsRequest,
-    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
+    auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.upload"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MappingResultResponse:
     """Admin corrects field mappings before approval."""
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
 
     if upload.status not in (UploadStatus.INGESTED, UploadStatus.INGESTED):
         raise ConflictError(
-            f"Cannot edit mappings in status '{upload.status.value}'. "
-            "Must be 'ingested'."
+            f"Cannot edit mappings in status '{upload.status.value}'. Must be 'ingested'."
         )
 
     # Apply corrections
@@ -384,7 +361,7 @@ async def update_mapping(
     await db.flush()
 
     # Re-fetch and return updated mapping
-    return await get_mapping(upload_id, admin, db)
+    return await get_mapping(upload_id, auth, db)
 
 
 # ── Approve / Reject / Retry ────────────────────────────────────────────────
@@ -393,25 +370,23 @@ async def update_mapping(
 @router.post("/{upload_id}/approve", response_model=ApproveUploadResponse)
 async def approve_upload(
     upload_id: str,
-    _auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.approve"))],
+    auth: Annotated[AuthContext, Depends(require_permission("admin.training_data.approve"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     body: ApproveUploadRequest | None = None,
 ) -> ApproveUploadResponse:
     """Approve mapping and trigger data transformation."""
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
 
     if upload.status not in (UploadStatus.INGESTED, UploadStatus.INGESTED):
         raise ConflictError(
-            f"Cannot approve in status '{upload.status.value}'. " "Must be 'ingested'."
+            f"Cannot approve in status '{upload.status.value}'. Must be 'ingested'."
         )
 
     upload.status = UploadStatus.INGESTED
-    upload.approved_by_id = admin.id
+    upload.approved_by_id = auth.user_id
     upload.approved_at = utcnow()
     await db.flush()
 
@@ -472,9 +447,7 @@ async def approve_upload(
             # Store transformed file
             transformed_path = f"transformed/{source.short_code}/{upload.id}.csv"
             try:
-                blob.upload_file(
-                    "training-data", transformed_path, transform_result.csv_bytes
-                )
+                blob.upload_file("training-data", transformed_path, transform_result.csv_bytes)
             except Exception as e:
                 logger.warning(f"Blob upload of transformed data failed: {e}")
 
@@ -555,17 +528,14 @@ async def retry_upload(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> UploadStatusResponse:
     """Re-trigger the Data Quality Agent for a failed upload."""
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
 
     if upload.status not in (UploadStatus.INGESTING, UploadStatus.INGESTING):
         raise ConflictError(
-            f"Can only retry uploads in 'ingesting' status, "
-            f"current: '{upload.status.value}'."
+            f"Can only retry uploads in 'ingesting' status, current: '{upload.status.value}'."
         )
 
     upload.status = UploadStatus.INGESTING
@@ -601,19 +571,13 @@ async def retry_upload(
                 "file_format": upload.file_format.value,
                 "raw_file_path": upload.raw_file_path,
                 "columns": (
-                    upload.file_metadata.get("columns", [])
-                    if upload.file_metadata
-                    else []
+                    upload.file_metadata.get("columns", []) if upload.file_metadata else []
                 ),
                 "sample_rows": (
-                    upload.file_metadata.get("sample_rows", [])[:10]
-                    if upload.file_metadata
-                    else []
+                    upload.file_metadata.get("sample_rows", [])[:10] if upload.file_metadata else []
                 ),
                 "row_count": upload.record_count or 0,
-                "existing_template_id": (
-                    str(active_template.id) if active_template else None
-                ),
+                "existing_template_id": (str(active_template.id) if active_template else None),
             },
         )
     except Exception as e:
@@ -641,9 +605,7 @@ async def mapping_callback(
     This is called by the Azure Function after processing is complete.
     In production, this would be protected by a service-to-service auth token.
     """
-    result = await db.execute(
-        select(TrainingUpload).where(TrainingUpload.id == upload_id)
-    )
+    result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
     upload = result.scalar_one_or_none()
     if not upload:
         raise NotFoundError("Training upload", upload_id)
@@ -673,9 +635,7 @@ async def mapping_callback(
             confidence=item.confidence,
             confidence_level=level,
             mapping_source=(
-                MappingSource(item.mapping_source)
-                if item.mapping_source
-                else MappingSource.LLM
+                MappingSource(item.mapping_source) if item.mapping_source else MappingSource.LLM
             ),
             sample_values=item.sample_values,
             data_type_detected=item.data_type_detected,
@@ -697,7 +657,7 @@ async def mapping_callback(
 async def _save_mapping_template(
     db: AsyncSession,
     upload: TrainingUpload,
-    mappings: list[FieldMapping],
+    mappings: Sequence[FieldMapping],
 ) -> None:
     """Save or update the mapping template for this source."""
     # Deactivate existing templates
@@ -741,7 +701,5 @@ async def _save_mapping_template(
     upload.mapping_template_id = template.id
 
     # Count mapped features
-    mapped_targets = {
-        m.target_feature for m in mappings if m.target_feature != "_unmapped"
-    }
+    mapped_targets = {m.target_feature for m in mappings if m.target_feature != "_unmapped"}
     upload.features_mapped = len(mapped_targets)

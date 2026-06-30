@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -44,4 +44,4 @@ class UUIDPrimaryKeyMixin:
 
 def utcnow() -> datetime:
     """Return current UTC datetime (timezone-aware)."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)

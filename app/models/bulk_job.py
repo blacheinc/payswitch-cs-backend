@@ -14,7 +14,7 @@ from app.models.organization import Organization
 from app.models.user import OrgUser
 
 
-class BulkJobStatus(str, enum.Enum):
+class BulkJobStatus(enum.StrEnum):
     VALIDATING = "validating"
     QUEUED = "queued"
     PROCESSING = "processing"
@@ -23,11 +23,11 @@ class BulkJobStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class IngestionStatus(str, enum.Enum):
-    PENDING = "pending"      # results not yet available
+class IngestionStatus(enum.StrEnum):
+    PENDING = "pending"  # results not yet available
     INGESTING = "ingesting"  # reading JSONL blob, writing ScoringResult rows
-    COMPLETE = "complete"    # all rows written, results queryable
-    FAILED = "failed"        # ingestion error
+    COMPLETE = "complete"  # all rows written, results queryable
+    FAILED = "failed"  # ingestion error
 
 
 class BulkScoringJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -87,5 +87,5 @@ class BulkScoringJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    organization: Mapped["Organization"] = relationship()
-    created_by: Mapped["OrgUser | None"] = relationship()
+    organization: Mapped[Organization] = relationship()
+    created_by: Mapped[OrgUser | None] = relationship()

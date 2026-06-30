@@ -37,12 +37,25 @@ spec:
       # Allow up to 60 s for graceful shutdown so in-flight scoring
       # requests + Service Bus message acks complete before SIGKILL.
       terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api
           # Image tag is patched per environment by the kustomize overlay
           # OR by the GitLab CI pipeline (commit-bumping `kustomization.yaml`).
           image: registry.gitlab.com/your-org/payswitch-credit-scoring:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8000
@@ -52,6 +65,9 @@ spec:
                 name: payswitch-config
             - secretRef:
                 name: payswitch-secrets
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: "250m"
@@ -69,21 +85,23 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          # The image's ENTRYPOINT runs alembic migrations on every boot.
-          # If you adopt the pre-sync migration Job pattern (job-migrate.yaml)
-          # this is harmless — the second `alembic upgrade head` call is a no-op.
+          # Migrations are disabled on application pods and run once through
+          # the Argo CD PreSync job in job-migrate.yaml.
           startupProbe:
             httpGet:
               path: /health
               port: http
             failureThreshold: 30   # 30 × 10 s = 5 min boot grace for migrations
             periodSeconds: 10
+      volumes:
+        - name: tmp
+          emptyDir: {}
       # If the image lives in a private registry, configure imagePullSecrets here:
       # imagePullSecrets:
       #   - name: gitlab-registry-credentials

@@ -11,8 +11,8 @@ Base URL: https://www.online.xdsdata.com/XdsDataRestApi/Api
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, cast
 
 import httpx
 
@@ -90,14 +90,14 @@ class XDSClient:
                 status_code=response.status_code,
             )
 
-        data = response.json()
+        data = cast(dict[str, Any], response.json())
         ticket = data.get("dataTicket")
-        if not ticket:
+        if not isinstance(ticket, str) or not ticket:
             error_msg = data.get("message", "No DataTicket returned")
             raise XDSError(f"Login failed: {error_msg}")
 
         self._data_ticket = ticket
-        self._ticket_obtained_at = datetime.now(timezone.utc)
+        self._ticket_obtained_at = datetime.now(UTC)
         logger.info("[XDS] Login successful, DataTicket obtained")
         return ticket
 
@@ -212,7 +212,7 @@ class XDSClient:
                 status_code=response.status_code,
             )
 
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     async def get_consumer_mobile_credit(
         self,
@@ -238,7 +238,7 @@ class XDSClient:
                 status_code=response.status_code,
             )
 
-        return response.json()
+        return cast(dict[str, Any], response.json())
 
     # ── Combined Flow ────────────────────────────────────────────────────
 

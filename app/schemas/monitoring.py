@@ -12,11 +12,9 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 # ── Shared ────────────────────────────────────────────────────────────────────
 
@@ -66,9 +64,7 @@ class RuleEvaluateRequest(BaseModel):
     probability_of_default: float = Field(
         ..., ge=0.0, le=1.0, description="PD value between 0 and 1"
     )
-    score_grade: str = Field(
-        ..., pattern="^[A-F]$", description="Score grade A through F"
-    )
+    score_grade: str = Field(..., pattern="^[A-F]$", description="Score grade A through F")
     data_engineer_decision_label: str | None = None
     fraud_risk_flag: str | None = None
     recommended_loan_amount_ghs: float | None = None

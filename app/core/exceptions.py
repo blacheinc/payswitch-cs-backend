@@ -8,11 +8,10 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-
 # ── Exception Classes ─────────────────────────────────────────────────────────
 
 
-class AppException(Exception):
+class AppError(Exception):
     """Base exception for application errors."""
 
     def __init__(
@@ -29,7 +28,7 @@ class AppException(Exception):
         super().__init__(message)
 
 
-class NotFoundError(AppException):
+class NotFoundError(AppError):
     """Resource not found."""
 
     def __init__(self, resource: str, identifier: str | None = None):
@@ -43,7 +42,7 @@ class NotFoundError(AppException):
         )
 
 
-class ConflictError(AppException):
+class ConflictError(AppError):
     """Resource already exists or conflict."""
 
     def __init__(self, message: str = "Resource already exists"):
@@ -54,19 +53,19 @@ class ConflictError(AppException):
         )
 
 
-class ValidationError(AppException):
+class ValidationError(AppError):
     """Business validation error (not schema validation)."""
 
     def __init__(self, message: str, details: dict[str, Any] | None = None):
         super().__init__(
             message=message,
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             error_code="VALIDATION_ERROR",
             details=details,
         )
 
 
-class AuthenticationError(AppException):
+class AuthenticationError(AppError):
     """Authentication failed."""
 
     def __init__(self, message: str = "Invalid credentials"):
@@ -77,7 +76,7 @@ class AuthenticationError(AppException):
         )
 
 
-class AuthorizationError(AppException):
+class AuthorizationError(AppError):
     """Authorization failed (authenticated but lacking permissions)."""
 
     def __init__(self, message: str = "Insufficient permissions"):
@@ -88,7 +87,7 @@ class AuthorizationError(AppException):
         )
 
 
-class RateLimitError(AppException):
+class RateLimitError(AppError):
     """Rate limit exceeded."""
 
     def __init__(self, retry_after: int | None = None):
@@ -103,7 +102,7 @@ class RateLimitError(AppException):
         )
 
 
-class IdempotencyConflictError(AppException):
+class IdempotencyConflictError(AppError):
     """Duplicate idempotency key – return cached response."""
 
     def __init__(self, cached_response: dict[str, Any]):
@@ -115,7 +114,7 @@ class IdempotencyConflictError(AppException):
         )
 
 
-class ScoringError(AppException):
+class ScoringError(AppError):
     """Error during credit scoring."""
 
     def __init__(self, message: str = "Scoring failed"):
@@ -126,7 +125,7 @@ class ScoringError(AppException):
         )
 
 
-class OrganizationSuspendedError(AppException):
+class OrganizationSuspendedError(AppError):
     """Organization is suspended."""
 
     def __init__(self):
@@ -143,10 +142,8 @@ class OrganizationSuspendedError(AppException):
 def register_exception_handlers(app: FastAPI) -> None:
     """Register all custom exception handlers with the FastAPI app."""
 
-    @app.exception_handler(AppException)
-    async def app_exception_handler(
-        request: Request, exc: AppException
-    ) -> JSONResponse:
+    @app.exception_handler(AppError)
+    async def app_exception_handler(request: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -174,9 +171,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(IdempotencyConflictError)
-    async def idempotency_handler(
-        request: Request, exc: IdempotencyConflictError
-    ) -> JSONResponse:
+    async def idempotency_handler(request: Request, exc: IdempotencyConflictError) -> JSONResponse:
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=exc.cached_response,

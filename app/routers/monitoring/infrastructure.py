@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.dependencies import AuthContext, require_permission
-
 from app.services.metrics_aggregator import get_infrastructure_metrics
 
 router = APIRouter()
@@ -28,6 +27,4 @@ async def infrastructure_dashboard(
     - period: 1h, 6h, 24h, 7d, 30d (default: 24h)
     - endpoint: filter to a specific endpoint path
     """
-    return await get_infrastructure_metrics(
-        db, period=period, endpoint_filter=endpoint
-    )
+    return await get_infrastructure_metrics(db, period=period, endpoint_filter=endpoint)

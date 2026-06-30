@@ -23,7 +23,6 @@ from app.services.training_data_features import (
     RECOMMENDED_RECORD_COUNT,
     TARGET_FEATURES,
     TARGET_VARIABLE,
-    TYPE_CAST_MAP,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,9 +115,7 @@ def transform_data(
                 continue
 
             raw_value = row_values[col_idx]
-            if raw_value is None or (
-                isinstance(raw_value, str) and raw_value.strip() == ""
-            ):
+            if raw_value is None or (isinstance(raw_value, str) and raw_value.strip() == ""):
                 null_counts[target_col] = null_counts.get(target_col, 0) + 1
                 transformed_row[target_col] = None
                 continue
@@ -126,9 +123,7 @@ def transform_data(
             # Type casting
             feature_def = TARGET_FEATURES.get(target_col)
             if feature_def:
-                casted = _cast_value(
-                    raw_value, feature_def["type"], target_col, row_idx
-                )
+                casted = _cast_value(raw_value, feature_def["type"], target_col, row_idx)
                 if casted is None:
                     type_errors.append(
                         {
@@ -150,9 +145,7 @@ def transform_data(
             income = transformed_row.get("monthly_income")
             repayment = transformed_row.get("monthly_loan_repayment")
             if income and repayment and float(income) > 0:
-                transformed_row["debt_to_income_ratio"] = round(
-                    float(repayment) / float(income), 4
-                )
+                transformed_row["debt_to_income_ratio"] = round(float(repayment) / float(income), 4)
 
         transformed_rows.append(transformed_row)
 
@@ -208,17 +201,13 @@ def transform_data(
             f"recommended: {RECOMMENDED_RECORD_COUNT})."
         )
     elif total_rows < RECOMMENDED_RECORD_COUNT:
-        warnings.append(
-            f"{total_rows} records (recommended: {RECOMMENDED_RECORD_COUNT}+)."
-        )
+        warnings.append(f"{total_rows} records (recommended: {RECOMMENDED_RECORD_COUNT}+).")
     if duplicate_count > 0:
         warnings.append(f"{duplicate_count} duplicate rows detected.")
 
     # 6. Write clean CSV
     csv_buffer = io.StringIO()
-    writer = csv.DictWriter(
-        csv_buffer, fieldnames=output_columns, extrasaction="ignore"
-    )
+    writer = csv.DictWriter(csv_buffer, fieldnames=output_columns, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(valid_rows)
     csv_bytes = csv_buffer.getvalue().encode("utf-8")
@@ -233,9 +222,7 @@ def transform_data(
     )
 
 
-def _get_all_rows(
-    raw_bytes: bytes, file_name: str, parsed_result: Any
-) -> list[list[Any]]:
+def _get_all_rows(raw_bytes: bytes, file_name: str, parsed_result: Any) -> list[list[Any]]:
     """Re-parse the full file to get all data rows (not just samples)."""
     full_parse = parse_file(raw_bytes, file_name)
     # For CSV/TSV/TXT, sample_rows might be truncated, so re-parse fully
@@ -258,11 +245,12 @@ def _get_all_rows(
             except csv_mod.Error:
                 reader = csv_mod.reader(io.StringIO(text))
 
-        rows = list(reader)
-        return rows[1:]  # skip header
+        csv_rows = list(reader)
+        return csv_rows[1:]  # skip header
 
     elif ext == "json":
         import json as json_mod
+
         from app.services.file_parser import _flatten_dict
 
         parsed = json_mod.loads(raw_bytes.decode("utf-8-sig"))
@@ -274,29 +262,28 @@ def _get_all_rows(
 
         flat_records = [_flatten_dict(r) for r in parsed]
         columns = full_parse.columns
-        return [
-            [str(record.get(col, "")) for col in columns] for record in flat_records
-        ]
+        return [[str(record.get(col, "")) for col in columns] for record in flat_records]
 
     elif ext == "xlsx":
         from openpyxl import load_workbook
 
         wb = load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
         ws = wb.active
-        rows: list[list[Any]] = []
+        if ws is None:
+            wb.close()
+            return []
+        xlsx_rows: list[list[Any]] = []
         for i, row in enumerate(ws.iter_rows(values_only=True)):
             if i == 0:
                 continue  # skip header
-            rows.append([str(cell) if cell is not None else "" for cell in row])
+            xlsx_rows.append([str(cell) if cell is not None else "" for cell in row])
         wb.close()
-        return rows
+        return xlsx_rows
 
     return []
 
 
-def _cast_value(
-    value: Any, target_type: str, col_name: str, row_idx: int
-) -> Any | None:
+def _cast_value(value: Any, target_type: str, col_name: str, row_idx: int) -> Any | None:
     """Attempt to cast a value to the target type."""
     if value is None:
         return None

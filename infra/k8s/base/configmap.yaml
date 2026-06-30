@@ -14,6 +14,10 @@ metadata:
 data:
   # Application
   APP_ENV: "production"
+  # Argo's PreSync Job owns one-shot migrations/bootstrap. API replicas must
+  # never race each other on schema or first-user setup.
+  RUN_DB_MIGRATIONS: "false"
+  RUN_BOOTSTRAP_ADMIN: "false"
   PORT: "8000"
 
   # Frontend / email links — must be set per env.

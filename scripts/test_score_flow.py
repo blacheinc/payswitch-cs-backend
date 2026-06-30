@@ -1,16 +1,18 @@
 """End-to-end test: bureau-lookup → score-request → fetch by ID."""
+
 import asyncio
 import json
+import os
+
 import httpx
 
-BASE = "http://localhost:8000"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 
 async def main():
     async with httpx.AsyncClient(base_url=BASE, timeout=30.0) as c:
-
         # ── Step 0: Login as admin ──────────────────────────────────
         print("\n═══ Step 0: Login ═══")
         r = await c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS})
@@ -38,16 +40,18 @@ async def main():
                 r = await c.get(f"/admin/organizations/{org_id}/users", headers=headers)
                 if r.status_code == 200:
                     users = r.json()
-                    print(f"   Org users: {users.get('total', len(users) if isinstance(users, list) else 0)}")
+                    fallback_total = len(users) if isinstance(users, list) else 0
+                    print(f"   Org users: {users.get('total', fallback_total)}")
             else:
                 print("❌ No organizations found — cannot test scoring")
                 return
 
             # We need an org user token. Let's create a temp user and login.
             import uuid
-            from app.db import async_session_factory
-            from app.models.user import OrgUser, OrgRoleLabel, OrgUserStatus
+
             from app.core.security import hash_password
+            from app.db import async_session_factory
+            from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 
             test_email = f"scoretest_{uuid.uuid4().hex[:6]}@test.com"
             test_pass = "Test@1234"

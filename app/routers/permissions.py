@@ -27,10 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError, ValidationError
 from app.db import get_db
-from app.dependencies import AuthContext, require_any_permission, require_permission
+from app.dependencies import AuthContext, require_any_permission
 from app.models.permission import Permission, Role, RolePermission
+from app.schemas.common import SuccessResponse
 from app.schemas.permissions import (
-    AssignRoleRequest,
     CreateRoleRequest,
     PermissionListResponse,
     PermissionResponse,
@@ -40,7 +40,6 @@ from app.schemas.permissions import (
     RoleResponse,
     UpdateRoleRequest,
 )
-from app.schemas.common import SuccessResponse
 from app.services.permission_seeder import ALL_ORG_PERMISSION_CODES, ALL_PERMISSION_CODES
 
 router = APIRouter(prefix="/v1", tags=["Permissions & Roles"])
@@ -49,10 +48,12 @@ router = APIRouter(prefix="/v1", tags=["Permissions & Roles"])
 # Permissions whose group_name appears here are omitted from GET /v1/permissions.
 # They still exist in the DB and are enforced server-side — they just aren't
 # surfaced in the role builder UI.  Add/remove group names here as needed.
-EXCLUDED_PERMISSION_GROUPS: frozenset[str] = frozenset([
-    "API Keys",
-    "Webhooks",
-])
+EXCLUDED_PERMISSION_GROUPS: frozenset[str] = frozenset(
+    [
+        "API Keys",
+        "Webhooks",
+    ]
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -61,12 +62,16 @@ EXCLUDED_PERMISSION_GROUPS: frozenset[str] = frozenset([
 async def _role_to_response(db: AsyncSession, role: Role) -> RoleResponse:
     """Load a Role's permissions and return a RoleResponse."""
     perms = (
-        await db.execute(
-            select(Permission)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id == role.id)
+        (
+            await db.execute(
+                select(Permission)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id == role.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return RoleResponse(
         id=role.id,
@@ -107,21 +112,29 @@ async def list_permissions(
     """
     if auth.user_type == "admin":
         rows = (
-            await db.execute(
-                select(Permission).where(
-                    Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS)
+            (
+                await db.execute(
+                    select(Permission).where(
+                        Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS)
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     else:
         rows = (
-            await db.execute(
-                select(Permission).where(
-                    Permission.scope == "org",
-                    Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS),
+            (
+                await db.execute(
+                    select(Permission).where(
+                        Permission.scope == "org",
+                        Permission.group_name.not_in(EXCLUDED_PERMISSION_GROUPS),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     return PermissionListResponse(
         items=[PermissionResponse.model_validate(p) for p in rows],
@@ -144,23 +157,30 @@ async def list_roles(
     """
     if auth.user_type == "admin":
         rows = (
-            await db.execute(
-                select(Role).where(
-                    Role.scope == "platform",
-                    Role.organization_id.is_(None),
+            (
+                await db.execute(
+                    select(Role).where(
+                        Role.scope == "platform",
+                        Role.organization_id.is_(None),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     else:
         rows = (
-            await db.execute(
-                select(Role).where(
-                    Role.scope == "org",
-                    (Role.organization_id == auth.organization_id)
-                    | (Role.is_system == True),  # noqa: E712
+            (
+                await db.execute(
+                    select(Role).where(
+                        Role.scope == "org",
+                        (Role.organization_id == auth.organization_id) | (Role.is_system == True),  # noqa: E712
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     items = [await _role_to_response(db, r) for r in rows]
     return RoleListResponse(items=items, total=len(items))
@@ -169,7 +189,9 @@ async def list_roles(
 @router.post("/roles", response_model=RoleActionResponse, status_code=status.HTTP_201_CREATED)
 async def create_role(
     body: CreateRoleRequest,
-    auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))],
+    auth: Annotated[
+        AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RoleActionResponse:
     """Create a custom role.
@@ -188,9 +210,7 @@ async def create_role(
     allowed_codes = ALL_PERMISSION_CODES if auth.user_type == "admin" else ALL_ORG_PERMISSION_CODES
     invalid = [c for c in body.permission_codes if c not in allowed_codes]
     if invalid:
-        raise ValidationError(
-            f"Unknown or out-of-scope permission codes: {', '.join(invalid)}"
-        )
+        raise ValidationError(f"Unknown or out-of-scope permission codes: {', '.join(invalid)}")
 
     # Check unique name within scope/org
     existing = (
@@ -217,10 +237,10 @@ async def create_role(
 
     if body.permission_codes:
         perm_rows = (
-            await db.execute(
-                select(Permission).where(Permission.code.in_(body.permission_codes))
-            )
-        ).scalars().all()
+            (await db.execute(select(Permission).where(Permission.code.in_(body.permission_codes))))
+            .scalars()
+            .all()
+        )
         for p in perm_rows:
             db.add(RolePermission(role_id=role.id, permission_id=p.id))
         await db.flush()
@@ -235,9 +255,7 @@ async def get_role(
     auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.read", "roles.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RoleResponse:
-    role = (
-        await db.execute(select(Role).where(Role.id == role_id))
-    ).scalar_one_or_none()
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
 
     if not role:
         raise NotFoundError("Role", str(role_id))
@@ -254,12 +272,12 @@ async def get_role(
 async def update_role(
     role_id: UUID,
     body: UpdateRoleRequest,
-    auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))],
+    auth: Annotated[
+        AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RoleActionResponse:
-    role = (
-        await db.execute(select(Role).where(Role.id == role_id))
-    ).scalar_one_or_none()
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
 
     if not role:
         raise NotFoundError("Role", str(role_id))
@@ -272,29 +290,33 @@ async def update_role(
         role.description = body.description
 
     if body.permission_codes is not None:
-        allowed_codes = ALL_PERMISSION_CODES if auth.user_type == "admin" else ALL_ORG_PERMISSION_CODES
+        allowed_codes = (
+            ALL_PERMISSION_CODES if auth.user_type == "admin" else ALL_ORG_PERMISSION_CODES
+        )
         invalid = [c for c in body.permission_codes if c not in allowed_codes]
         if invalid:
-            raise ValidationError(
-                f"Unknown or out-of-scope permission codes: {', '.join(invalid)}"
-            )
+            raise ValidationError(f"Unknown or out-of-scope permission codes: {', '.join(invalid)}")
 
         # Delete existing RolePermissions and re-insert
         existing_rp = (
-            await db.execute(
-                select(RolePermission).where(RolePermission.role_id == role.id)
-            )
-        ).scalars().all()
+            (await db.execute(select(RolePermission).where(RolePermission.role_id == role.id)))
+            .scalars()
+            .all()
+        )
         for rp in existing_rp:
             await db.delete(rp)
         await db.flush()
 
         if body.permission_codes:
             perm_rows = (
-                await db.execute(
-                    select(Permission).where(Permission.code.in_(body.permission_codes))
+                (
+                    await db.execute(
+                        select(Permission).where(Permission.code.in_(body.permission_codes))
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for p in perm_rows:
                 db.add(RolePermission(role_id=role.id, permission_id=p.id))
 
@@ -307,12 +329,12 @@ async def update_role(
 @router.delete("/roles/{role_id}", response_model=SuccessResponse)
 async def delete_role(
     role_id: UUID,
-    auth: Annotated[AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))],
+    auth: Annotated[
+        AuthContext, Depends(require_any_permission("admin.roles.manage", "roles.manage"))
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
-    role = (
-        await db.execute(select(Role).where(Role.id == role_id))
-    ).scalar_one_or_none()
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
 
     if not role:
         raise NotFoundError("Role", str(role_id))
