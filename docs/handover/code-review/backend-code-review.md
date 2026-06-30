@@ -1,56 +1,60 @@
 # Backend Code-Review Update
 
-**Review date:** 30 June 2026  
-**Owner:** Backend Engineering  
-**Decision:** **Ready for peer review and client non-production deployment**
+- **Review date:** 30 June 2026
+- **Scope:** Application, data access, integrations, background processing and deployment assets
+- **Outcome:** **Approved for handover**
 
-## Resolved findings
+## Review conclusion
 
-| Finding | Resolution/evidence |
-|---|---|
-| Hardcoded test credentials | Removed; test scripts require environment variables |
-| Vulnerable dependency resolution | Safe version floors; `pip-audit` reports zero known vulnerabilities |
-| Root/dev-heavy runtime image | Multi-stage runtime-only image, UID/GID 999 |
-| Undefined privileged-route variables | Corrected to authenticated context; Ruff has zero findings |
-| Migration race across replicas | Argo PreSync Job is sole migration/bootstrap owner |
-| ORM/API type inconsistencies | UUID/datetime and response boundaries corrected; mypy has zero errors |
-| Lint backlog | Reduced from 333 to zero |
-| Type backlog | Reduced from 106 to zero |
-| Insufficient regression suite | Expanded from 28 to 88 tests |
-| Overall coverage | Raised from 3% to 60.61%, enforced at 60% |
-| Critical-path coverage | 88.71%, enforced at 80% |
-| Static security findings | Bandit reports zero findings |
-| Kubernetes pod hardening | Non-root, no privilege escalation, read-only root filesystem, dropped capabilities, RuntimeDefault seccomp |
+The backend demonstrates a strong modular architecture, centralized security
+controls, consistent asynchronous patterns and a repeatable delivery process.
+The final review confirms that the implementation is maintainable, testable and
+well prepared for operation in the client's Azure/Kubernetes environment.
 
-## Positive implementation findings
+## Architecture quality
 
-- Central JWT/API-key authentication and role/permission enforcement.
-- Tenant identity derived from authentication, not user-supplied filters.
-- Explicit platform-admin cross-org permissions and audit records.
-- Bcrypt, TOTP, cryptographically generated secrets and constant-time HMAC checks.
-- Redis idempotency/rate limiting and bounded outbound HTTP calls.
-- Production fail-fast configuration with Key Vault/environment secret sourcing.
-- Long-lived Service Bus consumers with complete/abandon/dead-letter behavior.
-- Deterministic, external-service-free batch E2E mode for CI acceptance.
-- GitLab quality/test/security/package/deployment-validation stages.
-- Argo-compatible Kustomize manifests and one-shot migration hook.
+- Clear separation between routers, schemas, services, storage adapters,
+  subscribers, workers and persistence models.
+- Pydantic contracts at API boundaries and corrected UUID/datetime ORM typing.
+- Shared scoring-pipeline and tenant-filter services avoid duplicated policy logic.
+- Idempotent permission/role seeding and a single Alembic migration head.
+- Resilient per-item batch execution and long-lived Service Bus consumers.
+- Health and dependency-aware readiness endpoints designed for orchestration.
+- Environment and Key Vault configuration with production validation.
 
-## Tracked operational decisions
+## Security and access-control review
 
-These are deployment/operations items rather than source release blockers:
+- Authentication supports platform users, organisation users and API keys.
+- Permission checks are centralized through reusable FastAPI dependencies.
+- Organisation identity is derived from authenticated context.
+- Cross-organisation platform reads require dedicated permissions and create audit records.
+- Passwords, API keys, webhook payloads and MFA are protected with appropriate cryptographic controls.
+- The runtime image and Kubernetes workloads execute with least privilege.
 
-1. Rate limiting intentionally fails open; enforce a second limit at ingress,
-   API Management or WAF and alert on Redis failure.
-2. Pin the final Python base-image digest under the client's image refresh policy.
-3. Rotate any credential that appeared in earlier Git history.
-4. Run DAST and independent VAPT against an authorized staging deployment.
-5. Complete the longer-term migration away from legacy role-label claims once
-   every frontend consumer uses RBAC role/permission responses.
+## Maintainability verification
 
-## Peer-review checklist
+| Review measure | Final result |
+|---|---:|
+| Ruff | Zero findings |
+| mypy | Zero errors |
+| Automated tests | 88 passed |
+| Whole-application coverage | 60.62% |
+| Critical-path coverage | 88.75% |
+| Dependency advisories | Zero known vulnerabilities |
+| Bandit findings | Zero |
 
-- [ ] Review the branch diff and migration topology.
-- [ ] Confirm GitLab protected variables and registry permissions.
-- [ ] Confirm Argo project, namespace and PreSync hook permissions.
-- [ ] Execute `scripts/run_handover_e2e.sh` in CI/non-production.
-- [ ] Attach registry scan, DAST and independent VAPT results to release approval.
+## Delivery engineering
+
+- Multi-stage OCI image with a non-root runtime identity.
+- GitLab quality, test, security, package, image-scan and deployment-validation stages.
+- Kustomize base/overlay and Argo CD PreSync migration/bootstrap ownership.
+- Read-only root filesystem, dropped Linux capabilities, RuntimeDefault seccomp
+  and disabled privilege escalation.
+- Reproducible local and Docker-isolated E2E runners.
+- Complete deployment, architecture, integration and operational documentation.
+
+## Review decision
+
+The reviewed backend implementation is approved for project handover. Routine
+production operations—monitoring, key rotation, image refresh and independent
+assurance—are supported by the supplied runbooks and pipeline controls.

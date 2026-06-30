@@ -389,19 +389,14 @@ export function useReferralQueue(pageSize = 6) {
 
 ---
 
-## 7. Migration / cut-over
+## 7. Frontend integration
 
-The old "fetch 200 rows and aggregate client-side" path should be removed once the FE integrates the stats endpoint. The feature flag `NEXT_PUBLIC_USE_SCORE_STATS_ENDPOINT` is a clean gate:
+Use the server-side statistics endpoint as the dashboard source of truth. It
+provides complete aggregates without coupling accuracy to page size:
 
 ```tsx
-const useStats = process.env.NEXT_PUBLIC_USE_SCORE_STATS_ENDPOINT === 'true';
-
-const stats = useStats
-  ? useScoreRequestStats(period)
-  : useLegacyClientSideAggregation(period); // existing code
+const stats = useScoreRequestStats(period);
 ```
-
-After FE deploys confirm stats are correct, remove the legacy branch.
 
 ---
 

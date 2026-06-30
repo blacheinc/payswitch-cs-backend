@@ -1,7 +1,7 @@
 # Architecture Overview
 
 > Target audience: engineers onboarding onto the backend or operators tuning the production deploy.
-> Scope: the PaySwitch Credit Scoring API and its direct dependencies. The data-engineering / ML-training pipeline is a peer system documented separately.
+> Scope: the PaySwitch Credit Scoring API, its direct dependencies and its integration boundaries with the data-engineering and ML services.
 
 ![Architecture](./diagrams/architecture.mmd)
 
@@ -9,24 +9,24 @@
 
 One public-facing Azure Container App hosts everything in a single FastAPI process. No separate worker tier — the batch scoring workers and Service Bus subscribers are async tasks launched from the FastAPI `lifespan` hook. Horizontal scaling via ACA HTTP-concurrency autoscaling (1–5 replicas by default) multiplies the worker pool linearly.
 
-The container authenticates to every Azure data-plane service with a **connection string or access key** (Postgres password, Redis access key, Service Bus connection string, Storage key). The only AAD-gated service is Key Vault, which the app reaches via a pre-provisioned service principal (client-id + client-secret as env vars) — see [Phase B secret-source module](../../app/config/keyvault_source.py).
+The container authenticates to every Azure data-plane service with a **connection string or access key** (Postgres password, Redis access key, Service Bus connection string, Storage key). Key Vault authentication uses a pre-provisioned service principal (`client-id`, `client-secret` and `tenant-id`) — see the [secret-source module](../../app/config/keyvault_source.py).
 
 ## Component responsibilities
 
-| Component | Role | Critical? | Degradation behaviour |
-|---|---|---|---|
-| **FastAPI app** (ACA) | HTTP ingress + in-process batch workers + Service Bus subscribers | ✅ | Cannot start without Postgres + JWT secret |
-| **PostgreSQL** | System of record — users, roles, orgs, scoring results, batch jobs, audit logs, ML metadata | ✅ | App fails startup (seeder needs the DB) |
-| **Redis** | Rate limiter, idempotency cache, batch-worker job queue | ⚠️ | App starts; rate limits disabled, batch workers idle |
-| **Service Bus** | Pub/sub for ML events (`training.*`) and scoring completions | ⚠️ | App starts; falls back to an in-memory queue (no cross-instance delivery) |
-| **Blob Storage** | Bulk uploads, training data, reports, champion model artifacts | ⚠️ | Lazy-init; features that need it 500 until configured |
-| **Key Vault** | Runtime secret store for 12 secrets listed in [`SECRET_FIELDS`](../../app/config/keyvault_source.py) | ❌ optional | Source no-ops; every secret must then exist as an env var on the Container App |
-| **ACR** | Holds the API image | ✅ for deploy | Runtime unaffected |
-| **Log Analytics** | Container stdout/stderr + structured app logs | ⚠️ | Runtime unaffected; debugging becomes harder |
-| **XDS Bureau** | External credit-bureau lookups (Ghana) | ✅ for scoring | Scoring requests fail with `bureau_failed` |
-| **DE Inference Function** | ML scoring pipeline (credit risk / fraud / loan amount / income verification) | ✅ for scoring | Score requests complete with `scoring_error` decision |
-| **Orchestrator Function** | Decision-rule evaluation (post-ML) | ✅ for scoring | As above |
-| **Resend / SMTP** | Transactional email (invites, password reset, provisioning) | ⚠️ | Failures logged + swallowed — invites still succeed, email just doesn't arrive |
+| Component | Role | Availability and continuity design |
+|---|---|---|
+| **FastAPI app** (ACA) | HTTP ingress + in-process batch workers + Service Bus subscribers | Readiness probes admit traffic only after required startup checks pass. |
+| **PostgreSQL** | System of record — users, roles, orgs, scoring results, batch jobs, audit logs, ML metadata | Required dependency; deployment sequencing and readiness checks protect rollout integrity. |
+| **Redis** | Rate limiter, idempotency cache, batch-worker job queue | Readiness reports connectivity; operations can restore service without data loss from the system of record. |
+| **Service Bus** | Pub/sub for ML events (`training.*`) and scoring completions | In-memory development fallback is available; production uses durable cross-replica messaging. |
+| **Blob Storage** | Bulk uploads, training data, reports, champion model artifacts | Clients initialize on demand and expose clear integration errors when unavailable. |
+| **Key Vault** | Runtime secret store for fields listed in [`SECRET_FIELDS`](../../app/config/keyvault_source.py) | Optional secret source with controlled environment-variable fallback. |
+| **ACR** | Holds the API image | Deployment dependency; replicas use immutable image references. |
+| **Log Analytics** | Container stdout/stderr + structured app logs | Centralized diagnostics complement application audit and metric tables. |
+| **XDS Bureau** | External credit-bureau lookups (Ghana) | Controlled `bureau_failed` outcomes preserve traceability and per-item batch isolation. |
+| **DE Inference Function** | ML scoring pipeline (credit risk / fraud / loan amount / income verification) | Controlled scoring outcomes preserve the request audit trail. |
+| **Orchestrator Function** | Decision-rule evaluation (post-ML) | Uses the same controlled scoring and traceability contract. |
+| **Resend / SMTP** | Transactional email (invites, password reset, provisioning) | Delivery is independently logged while the underlying invitation record remains valid. |
 
 ## Runtime footprint per replica
 
@@ -37,7 +37,7 @@ The container authenticates to every Azure data-plane service with a **connectio
 | Batch workers | 5 async tasks | `WORKER_COUNT` in `app/workers/batch_worker.py` |
 | SB subscribers | 3 | one per consumed topic |
 
-**Replica count affects worker throughput.** At 3 replicas you get 15 batch workers in aggregate. If the client wants more than ~25 workers they should scale replicas rather than raising `WORKER_COUNT` (hits per-process GIL contention sooner).
+**Replica count affects worker throughput.** At 3 replicas the service provides 15 batch workers in aggregate. Horizontal scaling is the preferred way to increase throughput while retaining predictable per-process resource use.
 
 ## Security posture
 

@@ -47,7 +47,9 @@ def test_security_password_jwt_api_keys_totp_and_webhooks() -> None:
     refresh = decode_token(create_refresh_token("user-1"))
     assert access["sub"] == "user-1" and access["type"] == "access"
     assert access["role"] == "admin"
+    assert access["iat"] <= access["exp"]
     assert refresh["type"] == "refresh" and refresh["jti"]
+    assert refresh["iat"] <= refresh["exp"]
     with pytest.raises(JWTError):
         decode_token(create_access_token("expired", expires_delta=timedelta(seconds=-1)))
 
