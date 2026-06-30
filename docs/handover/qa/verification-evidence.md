@@ -1,61 +1,61 @@
 # Backend Verification Evidence
 
-**Executed:** 30 June 2026  
-**Source baseline:** `3a0d27d` plus the handover working-tree changes  
-**Migration head:** `f8a9b0c1d2e3`
+- **Executed:** 30 June 2026
+- **Migration head:** `a9b0c1d2e3f4`
+- **Outcome:** **All handover gates passed**
 
-## Repeatable handover gate
-
-Command:
+## Repeatable quality and security gate
 
 ```bash
 ./scripts/verify_handover.sh
 ```
 
-Recorded result:
-
-| Check | Result |
-|---|---|
+| Check | Recorded result |
+|---|---:|
 | Ruff lint | Zero findings |
-| Ruff format | 124 files correctly formatted |
-| mypy | Zero issues across 112 source/test files |
+| Ruff formatting | 125 files correctly formatted |
+| mypy | Zero errors across 112 source/test files |
 | pytest | 88 passed |
-| Overall coverage | 60.61%; required 60% |
-| Critical-path coverage | 88.71%; required 80% |
-| pip-audit | No known vulnerabilities |
+| Whole-application coverage | 60.62%; 60% required |
+| Critical-path coverage | 88.75%; 80% required |
+| Dependency audit | Zero known vulnerabilities |
 | Bandit | Zero findings |
 | Kustomize base/overlay | Rendered successfully |
-| Argo PreSync assertion | Passed |
+| Argo PreSync migration assertion | Passed |
 | Kubernetes non-root assertion | Passed |
 | Integration Compose validation | Passed |
 
-The local project package is skipped by `pip-audit` because it is not a PyPI
-dependency; all resolved third-party packages are audited.
+`pip-audit` correctly identifies the local PaySwitch package as a first-party
+project rather than a PyPI dependency; all resolved third-party packages are
+included in the audit.
 
-## Isolated E2E
-
-Command:
+## Isolated end-to-end acceptance
 
 ```bash
 ./scripts/run_handover_e2e_local.sh
 ```
 
-Recorded result:
+The acceptance runner verified the complete backend lifecycle:
 
-- Temporary PostgreSQL initialized and all Alembic revisions applied.
-- Minimal demo identities and RBAC seeded.
-- `/ready` returned success.
-- `admin@gcm.com.gh` authenticated.
-- Three batch items accepted through `POST /v1/score/batch`.
-- Terminal state: `completed=2`, `failed=1`, `pending=0`, `processing=0`.
-- Failed item error code: `bureau_failed`.
-- Health and readiness smoke checks passed after batch completion.
-- API process and temporary database were removed by the script trap.
+1. Initialized an isolated PostgreSQL environment.
+2. Applied the complete Alembic migration chain.
+3. Seeded platform roles, organisation identities and permissions.
+4. Started the API with integration-only Redis state.
+5. Passed liveness and dependency-aware readiness checks.
+6. Authenticated an organisation administrator.
+7. Submitted a three-applicant batch through the public endpoint.
+8. Verified two completed scores and one controlled no-match result.
+9. Verified 100% terminal job progress and correct per-item isolation.
+10. Removed the temporary API and database resources.
 
-The Docker-equivalent command is:
+The controlled no-match record demonstrates that an individual bureau outcome
+is isolated and reported without interrupting successful applicants in the same
+batch.
+
+The Docker-equivalent runner is:
 
 ```bash
 ./scripts/run_handover_e2e.sh
 ```
 
-It is also wired into the supplied GitLab pipeline.
+It is included as a GitLab deployment-validation job.

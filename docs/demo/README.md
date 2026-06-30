@@ -1,143 +1,81 @@
-# Business-demo data (no Azure / no live AI)
+# Business Demo Dataset
 
-This package lets the platform render rich, realistic data on every dashboard
-**without** Azure, without the AI scoring pipeline, and without running any live
-scoring. It is purely a data-population layer for a business/sales demo.
+The demo-data package populates every monitoring dashboard with a coherent,
+realistic 45-day dataset. It is designed for demonstrations, frontend
+integration and acceptance testing without invoking live bureau or AI services.
 
-What was done:
+## Included coverage
 
-- **Local env** repointed at Docker Postgres; Azure Service Bus / Blob / Champion
-  storage connection strings blanked in `.env` (the app falls back to an
-  in-memory queue and `None` blob reads — it boots clean). Original Azure values
-  are preserved in `.env.azure.bak`.
-- **`scripts/seed_demo_data.py`** populates ~20 tables through the ORM with a
-  coherent ~45-day history covering **every enum value / decision outcome** at
-  least once (all decisions incl. ERROR/FRAUD_HOLD, grades A–F, all request /
-  model-lifecycle / batch / loan-performance statuses, alerts across all four
-  dashboards, metrics, model metadata).
-- **`app/routers/monitoring/model_ops.py`** patched so the model-ops "champions"
-  list falls back to the `model_versions` table when the champion blob is absent
-  (Azure storage is gone). This is the correct behaviour for a no-Azure deploy.
+[`scripts/seed_demo_data.py`](../../scripts/seed_demo_data.py) creates:
 
-Redis is already on Railway and is reused as-is.
+- Platform and organisation identities with working RBAC assignments.
+- Five representative financial institutions across supported lifecycle states.
+- Score requests, decisions, grades and loan-performance outcomes.
+- Batch jobs and item-level results.
+- Risk, ModelOps, Compliance and Infrastructure dashboard metrics.
+- Model metadata, data sources, alerts and audit activity.
 
----
+The seed is deterministic enough for repeatable UI validation while preserving
+realistic distributions and timestamps. Schema ownership remains with Alembic;
+the seeder only creates demonstration records.
 
-## Run locally
+## Local run
 
 ```bash
-# 1. Start Postgres (Redis is remote on Railway; no local Redis needed)
-docker compose up -d postgres
+# Start local dependencies
+docker compose up -d postgres redis
 
-# 2. Apply schema
+# Build the complete current schema
 .venv/bin/alembic upgrade head
 
-# 3. Seed demo data (idempotent enum-fix runs automatically)
+# Populate the dataset
 .venv/bin/python scripts/seed_demo_data.py --reset --scale medium
-#   scales: small | medium | large
 
-# 4. Start the API
+# Start the API
 DEBUG=false .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
-#   docs: http://localhost:8000/docs
 ```
 
-### Demo logins
+Available scales are `small`, `medium` and `large`. The `--reset` option
+rebuilds only the declared demo tables and reseeds all required RBAC links.
 
-| Who          | Email                       | Password        |
-|--------------|-----------------------------|-----------------|
-| Platform admin (super) | `admin@payswitch.demo`         | `DemoPass!2026` |
-| Org admin (per org)    | `admin@<short>.com.gh`         | `DemoPass!2026` |
+## Demo identities
 
-Org short-names: `gcm`, `accradigital`, `kumasifin` (active), `voltasacco`
-(suspended), `tamalelend` (pending). e.g. `admin@gcm.com.gh`.
+| Persona | Email | Password |
+|---|---|---|
+| Platform administrator | `admin@payswitch.demo` | `DemoPass!2026` |
+| Organisation administrator | `admin@<short-name>.com.gh` | `DemoPass!2026` |
 
-### Verified dashboards (all 200 with rich data)
+Organisation short names are `gcm`, `accradigital`, `kumasifin`, `voltasacco`
+and `tamalelend`.
 
-`/v1/monitoring/model-ops` · `/risk` · `/infrastructure` · `/compliance` ·
-`/alerts` · `/admin/score-requests/stats` · `/admin/organizations` ·
-`/v1/score/batch` · org `/v1/score-requests/stats` · `/v1/score-requests`.
+## Dashboard coverage
 
----
+The dataset supports the ModelOps, Risk, Infrastructure and Compliance
+dashboards, alert feeds, platform score-request statistics, organisation lists,
+batch scoring views and organisation score-request views.
 
-## Why the enum-normalization step exists
+The ModelOps champion view uses persisted model-version metadata when a remote
+champion artifact is not configured, which keeps local and isolated acceptance
+environments fully representative.
 
-A **fresh** `alembic upgrade head` creates four enum types out of sync with the
-ORM models — `industry_type`, `source_type`, `training_data_status` are created
-with UPPERCASE labels, and `decision_type` only has the legacy
-`APPROVED/DECLINED/REFERRED/PENDING` set. The models bind the lowercase `.value`
-(and the newer decision values), so the app itself cannot read/write those tables
-on a freshly-migrated DB. `seed_demo_data.py` runs an idempotent
-`normalize_enums()` step that renames/adds the labels to match the models. This
-is required on **any** DB built from these migrations (local and Railway).
+## Deploying a dedicated demo environment
 
-> Follow-up worth doing later: fold `normalize_enums()` into a proper Alembic
-> migration so the schema is correct without the seeder.
-
----
-
-## Deploy + seed on Railway
-
-The Railway project already runs the backend + Redis. Add Postgres and point the
-backend at it.
-
-### 1. Add a Postgres service
-In the Railway project: **New → Database → PostgreSQL**. It exposes `PGHOST`,
-`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, a private host
-`postgres.railway.internal`, and a public TCP proxy (like the Redis
-`*.proxy.rlwy.net` host).
-
-### 2. Set the backend service variables
-On the **backend** service (Variables tab):
-
-```
-# asyncpg driver + Railway PRIVATE networking (note the +asyncpg scheme).
-# Replace `Postgres` with the actual Postgres service name if different:
-DATABASE_URL = postgresql+asyncpg://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/${{Postgres.PGDATABASE}}
-
-# IMPORTANT: use staging (NOT production). In production, validate_production()
-# REQUIRES the Azure Service Bus + Storage connection strings to be non-empty,
-# so blanking them under APP_ENV=production crashes the boot. staging skips that
-# check and lets the app run on the in-memory queue + DB fallback.
-APP_ENV = staging
-REDIS_URL = (leave as-is — already pointing at Railway Redis)
-JWT_SECRET_KEY = <set a real, non-"CHANGE-ME" secret>
-BOOTSTRAP_ADMIN_EMAIL = admin@payswitch.demo
-BOOTSTRAP_ADMIN_PASSWORD = DemoPass!2026
-BOOTSTRAP_ADMIN_NAME = Platform Administrator
-
-# Blank the Azure integrations so the app uses the in-memory queue + DB fallback:
-AZURE_SERVICEBUS_CONNECTION_STRING =
-AZURE_STORAGE_CONNECTION_STRING =
-CHAMPION_STORAGE_CONNECTION_STRING =
-```
-
-> The `+asyncpg` scheme is required — Railway's stock `DATABASE_URL` is a plain
-> `postgresql://` URL and the async engine needs `postgresql+asyncpg://`.
-> A literal alternative (public proxy) also works:
-> `postgresql+asyncpg://postgres:<pw>@<host>.proxy.rlwy.net:<port>/railway`.
-
-### 3. Deploy the code
-Push this branch (includes the `model_ops.py` champion fallback). On deploy, the
-container entrypoint runs `alembic upgrade head` automatically, then bootstraps
-the admin. Confirm the service is healthy at `/health`.
-
-### 4. Seed Railway's Postgres
-Easiest is to seed from your laptop against Railway's **public** Postgres proxy
-(same idea as the Redis `*.proxy.rlwy.net` URL):
+Use a non-production environment with its own PostgreSQL and Redis instances.
+Apply migrations before seeding, provide a strong environment-specific JWT
+secret, and omit optional Azure integration connection strings when those
+services are intentionally excluded from the demo.
 
 ```bash
-DATABASE_URL="postgresql+asyncpg://<PGUSER>:<PGPASSWORD>@<region>.proxy.rlwy.net:<PROXY_PORT>/<PGDATABASE>" \
-DEBUG=false \
+DATABASE_URL="postgresql+asyncpg://<user>:<password>@<host>:<port>/<database>" \
+APP_ENV=staging \
+JWT_SECRET_KEY="<strong-demo-secret>" \
 .venv/bin/python scripts/seed_demo_data.py --reset --scale medium
 ```
 
-(Get the public host/port from the Postgres service → **Connect → Public Network**.)
+For Railway, use the PostgreSQL service's private URL from the backend and its
+public proxy only for a one-time seed from an authorized workstation. For
+Kubernetes, the same command can run as a controlled one-off Job after the Argo
+PreSync migration has completed.
 
-The seeder runs the enum-normalization first, so a fresh Railway DB is handled
-automatically. After it finishes, refresh the dashboards — they render the same
-data you verified locally.
-
-> If you seed **after** the backend is already serving traffic, restart the
-> backend service once afterwards so startup re-seeds the RBAC roles that
-> `--reset` rebuilds. (Locally we seed before starting the API, so this is a
-> no-op there.)
+Demo credentials and seeded personal data are synthetic and must remain limited
+to non-production environments.

@@ -1,6 +1,6 @@
 # Kubernetes Deployment Overview
 
-> Audience: backend engineer briefing a client whose platform runs on Kubernetes with Argo CD and GitLab CI. The goal of this doc isn't a step-by-step deploy guide — it's a talking-points sheet so you can speak confidently about how this app fits into their stack and what decisions they own.
+> Audience: engineering and platform teams integrating PaySwitch with Kubernetes, Argo CD and GitLab CI. This overview explains the deployment architecture, supplied assets and environment-level configuration choices.
 >
 > **The Bicep / Container Apps deployment in [`docs/deployment/README.md`](./README.md) is one valid target — k8s is another.** The application code is identical for both; only the deploy artefacts differ.
 
@@ -29,7 +29,7 @@ infra/k8s/
 └── README.md
 ```
 
-These are working starting points the client can fork into their cluster repo. They're not opinionated about cluster choice (AKS, EKS, GKE, on-prem) — the only Azure-specific bit is the External Secrets Operator integration with Key Vault, and even that is optional.
+These are production-oriented reference assets ready to adapt in the target cluster repository. They are portable across AKS and other conformant Kubernetes distributions; Azure Key Vault integration through External Secrets Operator remains optional.
 
 ---
 
@@ -55,18 +55,18 @@ What stays exactly the same:
 
 ---
 
-## The four design choices the client owns
+## Four environment integration choices
 
-These are the questions you should walk into the call ready to discuss. They're decisions about *their* infrastructure, not ours — but having a recommendation for each shows we've thought about it.
+These choices align the supplied application manifests with the target platform's established standards.
 
 ### 1. How do secrets get into the cluster?
 
 | Option | When to pick |
 |---|---|
 | **External Secrets Operator → Azure Key Vault** | They already use ESO or similar. Cleanest fit because we already model secrets in Azure KV. Provides automatic refresh, version pinning, and a single source of truth. |
-| **Plain k8s `Secret` populated by GitLab CI** | They don't have ESO and don't want to install it. CI reads from KV (or wherever) at deploy time and creates/updates the Secret. Simple, works, but ages poorly — secret rotation requires a pipeline run. |
-| **Sealed Secrets** | They do GitOps for secrets and have Bitnami's controller. We'd commit `.sealed.yaml` files to git. Doesn't talk to KV directly. |
-| **Stick with the app's KV-source path** | Inject only `AZURE_KEYVAULT_URL` + the SP creds (3 env vars) as a small k8s `Secret`. App fetches everything else from KV at boot. **Lowest k8s surface area** — they don't have to mirror every secret in cluster. Trade-off: slower cold start, KV becomes a runtime dependency for boot. |
+| **Plain k8s `Secret` populated by GitLab CI** | Suitable where ESO is not part of the platform standard. CI reads from the approved secret store and creates or updates the Secret; rotation is performed through a pipeline run. |
+| **Sealed Secrets** | Suitable where Bitnami's controller is the established GitOps secret standard. Encrypted `.sealed.yaml` resources can be versioned without direct Key Vault synchronization. |
+| **Use the app's KV-source path** | Inject only `AZURE_KEYVAULT_URL` + the SP credentials (3 env vars) as a small k8s `Secret`. The app fetches the remaining approved secrets from KV at boot. This minimizes in-cluster secret duplication; account for Key Vault connectivity in startup readiness. |
 
 **My recommendation**: ESO if they have it; otherwise the "tiny SP-only Secret + app reads from KV" path because it preserves the Azure-native model and avoids re-implementing secret rotation in CI.
 
@@ -100,7 +100,7 @@ Each pod runs:
 - 5 batch-scoring async workers
 - 3 Service Bus subscribers
 
-**Don't crank `WORKER_COUNT` per pod beyond ~10** — Python's GIL caps useful concurrency. **Scale horizontally instead.** A reasonable starting HPA:
+Keep `WORKER_COUNT` at or below approximately 10 per pod and scale horizontally for additional throughput. A suitable initial HPA policy is:
 
 ```yaml
 minReplicas: 2          # so a deploy never drains traffic to zero
@@ -114,13 +114,13 @@ metrics:
         averageUtilization: 70
 ```
 
-If they have Prometheus + the custom-metrics adapter, request-concurrency-per-pod is a better signal than CPU. Document it; let them choose.
+Where Prometheus and a custom-metrics adapter are available, request concurrency per pod can complement CPU as a scaling signal.
 
 ---
 
-## Things the client should configure (their side)
+## Platform integration configuration
 
-Out of scope for our manifests, but worth raising:
+The platform team supplies these environment-specific values and policies:
 
 - **Ingress class** — nginx? traefik? Istio? We use a generic `Ingress`; they slot in their `IngressClassName`.
 - **TLS certificates** — cert-manager + Let's Encrypt is standard; or they bring their own ACM/cluster cert.
@@ -131,15 +131,15 @@ Out of scope for our manifests, but worth raising:
 
 ---
 
-## Talking-points cheatsheet
+## Common architecture questions
 
 When the call gets technical, these answer the most likely questions:
 
 > **"Does this run on managed identity?"**
-> No — connection-string style everywhere by design (per the project directive). Key Vault uses a service principal (client-id + secret + tenant), which is the closest thing KV offers to a connection string. Easy to swap for managed identity later if they want, since the SDK is the same.
+> Azure data-plane services use connection strings as required by the project integration standard. Key Vault authenticates through a service principal (`client-id`, `client-secret`, `tenant-id`) because Key Vault does not expose a connection-string credential.
 
 > **"Where do batch workers run?"**
-> In-process inside the FastAPI pod, started by the lifespan hook. Scaling = scale replicas. Each replica = 5 workers. No separate worker Deployment needed. We can split them out into a Job/CronJob later if their concurrency needs outgrow that model.
+> Workers run in-process inside each FastAPI pod and start through the lifespan hook. Each replica contributes five workers, making replica scaling the primary throughput control.
 
 > **"How do migrations work?"**
 > Argo runs `alembic upgrade head` and bootstrap through the supplied PreSync
@@ -147,7 +147,7 @@ When the call gets technical, these answer the most likely questions:
 > migration race during scale-up or rolling deploys.
 
 > **"Service Bus auth?"**
-> Connection string in the `Secret`. No SAS rotation in cluster yet — set the long-lived "RootManageSharedAccessKey" connection string and rotate via standard k8s secret update.
+> A Service Bus connection string is injected from the approved Kubernetes secret source. Rotation follows the platform's normal secret update and rolling-restart procedure; a least-privilege application authorization rule is recommended.
 
 > **"Postgres connections?"**
 > Each pod opens up to `database_pool_size + database_max_overflow = 30` connections by default. With 5 replicas that's 150 — adjust `max_connections` on the Postgres server accordingly, or front it with PgBouncer.
@@ -170,4 +170,4 @@ If they want to see the full Argo CD wiring, point at **[`infra/k8s/argocd-appli
 
 If they want to see how CI fits, point at the canonical **[`.gitlab-ci.yml`](../../.gitlab-ci.yml)**. The smaller **[`infra/k8s/gitlab-ci.example.yml`](../../infra/k8s/gitlab-ci.example.yml)** only demonstrates a separate GitOps tag-bump pattern.
 
-These are starting points, not finished products — they'll fork them into their own cluster repo, swap in their domain / registry / Argo project, and tune the resource limits to their cluster shape.
+The assets are complete integration references. The platform team applies its domain, registry, Argo project, secret source and resource sizing through the supplied overlay pattern.
