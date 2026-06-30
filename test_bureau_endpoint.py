@@ -1,7 +1,10 @@
 import asyncio
+import os
 import httpx
 
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 async def test_bureau_endpoint():
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=60.0) as client:
@@ -9,8 +12,8 @@ async def test_bureau_endpoint():
         login_resp = await client.post(
             "/auth/login",
             json={
-                "email": "engineering@opensaucery.africa",
-                "password": "opensaucery"
+                "email": ADMIN_EMAIL,
+                "password": ADMIN_PASSWORD,
             }
         )
         

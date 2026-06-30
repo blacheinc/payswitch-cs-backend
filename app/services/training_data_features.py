@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # The 30 features extracted from XDS Credit Bureau data (Product 45 + Product 49)
 TARGET_FEATURES: dict[str, dict[str, Any]] = {
     # ── Payment History & Delinquency ────────────────────────────────────

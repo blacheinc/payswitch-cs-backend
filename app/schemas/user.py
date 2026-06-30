@@ -66,6 +66,7 @@ class CreateAdminUserRequest(BaseModel):
     ``POST /admin/admins`` endpoint, which issues a temp password, emails
     the invitee, and assigns an RBAC role (not the legacy enum).
     """
+
     email: EmailStr
     name: str = Field(max_length=200)
     role: str = Field(
@@ -86,6 +87,7 @@ class InviteAdminRequest(BaseModel):
     the invitee is assigned the system **SUPER_ADMIN** role by default —
     callers who want a narrower scope should pass an explicit role_id.
     """
+
     email: EmailStr
     name: str = Field(max_length=200)
     role_id: UUID | None = Field(
@@ -112,6 +114,7 @@ class AdminUserDetailResponse(BaseSchema):
     Unlike the legacy :class:`AdminUserResponse` this includes the resolved
     RBAC role (`role_id`, `role_name`) rather than the retired enum badge.
     """
+
     id: UUID
     email: str
     name: str

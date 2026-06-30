@@ -7,7 +7,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ── Bureau Lookup Request ───────────────────────────────────────────────────
 
 
@@ -15,7 +14,9 @@ class BureauLookupRequest(BaseModel):
     """Customer identifiers to look up in XDS Credit Bureau."""
 
     full_name: str | None = Field(
-        default=None, min_length=2, max_length=200,
+        default=None,
+        min_length=2,
+        max_length=200,
         description="Consumer name. Optional if identification is provided.",
     )
     date_of_birth: date
@@ -47,38 +48,52 @@ class BureauFeatures(BaseModel):
     """
 
     # ── Direct from XDS fields (str passthrough for reverse mapping) ─────
-    highest_delinquency_rating: str | None = None           # 45:highestDelinquencyRating.highestDelinquencyRating → "1" / "Good"
-    has_active_arrears: str | None = None                   # 45:creditAccountSummary.totalAccountInArrearGHS → "2"
-    total_arrear_amount_ghs: str | None = None              # 45:creditAccountSummary.totalAmountInArrearGHS → "1,525.00"
-    total_outstanding_debt_ghs: str | None = None           # 45:creditAccountSummary.totalOutstandingdebtGHS → "3,890.00"
-    num_active_accounts: str | None = None                  # 45:creditAccountSummary.totalActiveAccountsGHS → "2"
-    total_monthly_instalment_ghs: str | None = None         # 45+49 creditAccountSummary instalment → "0.00"
-    num_accounts_total: str | None = None                   # 45:creditAccountSummary.totalNumberofAccountsGHS → "3"
-    num_bounced_cheques: str | None = None                  # 45:creditAccountSummary.totalNumberofDishonouredGHS → "0"
-    mobile_max_loan_ghs: str | None = None                  # 49:creditAccountSummary.highestAmountTaken → "153.00"
-    worst_arrears_24m: str | None = None                    # max of creditAgreementSummary[].monthsInArrears → "14"
-    num_dependants: str | None = None                       # 45:personalDetailsSummary.dependants → "0"
-    identity_verified: str | None = None                    # 45:personalDetailsSummary.nationalIDNo → "" or "RJB7045308753"
-    has_employer_detail: str | None = None                   # 45:personalDetailsSummary.employerDetail → "MOE" or ""
+    highest_delinquency_rating: str | None = (
+        None  # 45:highestDelinquencyRating.highestDelinquencyRating → "1" / "Good"
+    )
+    has_active_arrears: str | None = None  # 45:creditAccountSummary.totalAccountInArrearGHS → "2"
+    total_arrear_amount_ghs: str | None = (
+        None  # 45:creditAccountSummary.totalAmountInArrearGHS → "1,525.00"
+    )
+    total_outstanding_debt_ghs: str | None = (
+        None  # 45:creditAccountSummary.totalOutstandingdebtGHS → "3,890.00"
+    )
+    num_active_accounts: str | None = None  # 45:creditAccountSummary.totalActiveAccountsGHS → "2"
+    total_monthly_instalment_ghs: str | None = (
+        None  # 45+49 creditAccountSummary instalment → "0.00"
+    )
+    num_accounts_total: str | None = None  # 45:creditAccountSummary.totalNumberofAccountsGHS → "3"
+    num_bounced_cheques: str | None = (
+        None  # 45:creditAccountSummary.totalNumberofDishonouredGHS → "0"
+    )
+    mobile_max_loan_ghs: str | None = None  # 49:creditAccountSummary.highestAmountTaken → "153.00"
+    worst_arrears_24m: str | None = None  # max of creditAgreementSummary[].monthsInArrears → "14"
+    num_dependants: str | None = None  # 45:personalDetailsSummary.dependants → "0"
+    identity_verified: str | None = (
+        None  # 45:personalDetailsSummary.nationalIDNo → "" or "RJB7045308753"
+    )
+    has_employer_detail: str | None = None  # 45:personalDetailsSummary.employerDetail → "MOE" or ""
 
     # ── Renamed from XDS fields (aggregated from arrays, still str) ──────
-    applicant_age: str | None = None                        # 45:personalDetailsSummary.birthDate → "15/05/1990"
-    credit_age_months: str | None = None                    # oldest 45:creditAgreementSummary[].dateAccountOpened → "02/02/2018"
-    months_on_time_24m: str | None = None                   # count of "0" in m01–m24 → "18"
-    current_streak_on_time: str | None = None               # consecutive on-time from m01 → "0"
-    utilisation_ratio: str | None = None                    # currentBalance / openingBalance → "0.3402"
-    num_closed_accounts_good: str | None = None             # count: closedDate + non-adverse status → "6"
-    product_diversity_score: str | None = None              # count of unique account types → "5"
-    mobile_loan_history_count: str | None = None            # len(49:detailedFacilityInfo) → "3"
-    has_judgement: str | None = None                         # 1 if judgementSummary non-empty → "0" / "1"
-    has_written_off: bool | None = None                     # True if any accountStatusCode == "W"
-    has_charged_off: bool | None = None                     # True if any accountStatusCode == "G"
-    has_legal_handover: bool | None = None                  # True if any accountStatusCode == "L"
-    has_adverse_default: bool | None = None                 # True if defaults/adverseDetails non-empty
-    num_enquiries_3m: str | None = None                     # count within last 90 days → "2"
-    num_enquiries_12m: str | None = None                    # count within last 365 days → "3"
-    enquiry_reason_flags: str | None = None                 # 1 if any enquiries exist → "0" / "1"
-    address_stability: str | None = None                    # count of unique addresses → "5"
+    applicant_age: str | None = None  # 45:personalDetailsSummary.birthDate → "15/05/1990"
+    credit_age_months: str | None = (
+        None  # oldest 45:creditAgreementSummary[].dateAccountOpened → "02/02/2018"
+    )
+    months_on_time_24m: str | None = None  # count of "0" in m01–m24 → "18"
+    current_streak_on_time: str | None = None  # consecutive on-time from m01 → "0"
+    utilisation_ratio: str | None = None  # currentBalance / openingBalance → "0.3402"
+    num_closed_accounts_good: str | None = None  # count: closedDate + non-adverse status → "6"
+    product_diversity_score: str | None = None  # count of unique account types → "5"
+    mobile_loan_history_count: str | None = None  # len(49:detailedFacilityInfo) → "3"
+    has_judgement: str | None = None  # 1 if judgementSummary non-empty → "0" / "1"
+    has_written_off: bool | None = None  # True if any accountStatusCode == "W"
+    has_charged_off: bool | None = None  # True if any accountStatusCode == "G"
+    has_legal_handover: bool | None = None  # True if any accountStatusCode == "L"
+    has_adverse_default: bool | None = None  # True if defaults/adverseDetails non-empty
+    num_enquiries_3m: str | None = None  # count within last 90 days → "2"
+    num_enquiries_12m: str | None = None  # count within last 365 days → "3"
+    enquiry_reason_flags: str | None = None  # 1 if any enquiries exist → "0" / "1"
+    address_stability: str | None = None  # count of unique addresses → "5"
 
 
 # ── Bureau Metadata ─────────────────────────────────────────────────────────
@@ -88,20 +103,14 @@ class BureauMetadata(BaseModel):
     """Computed metadata from the bureau report."""
 
     credit_score: int | None = None
-    score_grade: str | None = Field(
-        default=None, pattern=r"^[A-F]$", description="A-F grade"
-    )
+    score_grade: str | None = Field(default=None, pattern=r"^[A-F]$", description="A-F grade")
     decision_label: str | None = Field(
         default=None,
         description="APPROVE / CONDITIONAL_APPROVE / REFER / DECLINE",
     )
     data_quality_score: float | None = Field(default=None, ge=0, le=1)
-    bureau_hit_status: str = Field(
-        default="HIT", description="HIT or NO_RECORD"
-    )
-    product_source: str | None = Field(
-        default=None, description="45, 49, 45+49"
-    )
+    bureau_hit_status: str = Field(default="HIT", description="HIT or NO_RECORD")
+    product_source: str | None = Field(default=None, description="45, 49, 45+49")
     applicant_age_at_application: str | None = None
     credit_age_months_at_application: str | None = None
 

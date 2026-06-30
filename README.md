@@ -46,6 +46,12 @@ See [`docs/deployment/README.md`](docs/deployment/README.md) for the full playbo
 - **[`infra/bicep/README.md`](infra/bicep/README.md)** — Bicep parameter reference.
 - **[`infra/k8s/README.md`](infra/k8s/README.md)** — Kustomize manifests + Argo CD + GitLab CI examples.
 
+### Assurance and handover
+- **[`docs/handover/README.md`](docs/handover/README.md)** — root index for backend QA, code review, VAPT, security controls and DPIA technical input.
+- [`docs/handover/qa/backend-qa-report.md`](docs/handover/qa/backend-qa-report.md) — date-stamped QA evidence and release recommendation.
+- [`docs/handover/security/internal-vapt-report.md`](docs/handover/security/internal-vapt-report.md) — internal assessment; not a substitute for the independent VAPT.
+- [`docs/handover/security/backend-security-controls.md`](docs/handover/security/backend-security-controls.md) — implemented backend controls and deployment responsibilities.
+
 ### Frontend integration
 - [`docs/fe_rbac_integration_guide.md`](docs/fe_rbac_integration_guide.md) — org-side RBAC.
 - [`docs/fe_admin_rbac_integration_guide.md`](docs/fe_admin_rbac_integration_guide.md) — platform-side RBAC.

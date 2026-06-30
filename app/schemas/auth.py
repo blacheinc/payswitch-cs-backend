@@ -93,6 +93,7 @@ class UserProfileResponse(BaseModel):
 
 class UserPermissionsResponse(BaseModel):
     """Returned by GET /auth/me/permissions."""
+
     user_id: str
     user_type: str  # "admin", "org_user", or "api_key"
     # Resolved permission codes.  ["*"] = SUPER_ADMIN wildcard.

@@ -14,6 +14,9 @@ Usage::
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,7 +25,7 @@ from app.schemas.api_log import ActorInfo
 
 async def resolve_actors(
     db: AsyncSession,
-    logs: list,
+    logs: Sequence[Any],
 ) -> dict[str, ActorInfo]:
     """Batch-load actor info for a page of ApiLog rows.
 
@@ -50,31 +53,34 @@ async def resolve_actors(
     actors: dict[str, ActorInfo] = {}
 
     if admin_user_ids:
-        rows = (
-            await db.execute(select(AdminUser).where(AdminUser.id.in_(admin_user_ids)))
-        ).scalars().all()
-        for u in rows:
-            actors[str(u.id)] = ActorInfo(
-                id=str(u.id), type="admin_user", name=u.name, email=u.email
+        admin_rows = (
+            (await db.execute(select(AdminUser).where(AdminUser.id.in_(admin_user_ids))))
+            .scalars()
+            .all()
+        )
+        for admin_user in admin_rows:
+            actors[str(admin_user.id)] = ActorInfo(
+                id=str(admin_user.id),
+                type="admin_user",
+                name=admin_user.name,
+                email=admin_user.email,
             )
 
     if org_user_ids:
-        rows = (
-            await db.execute(select(OrgUser).where(OrgUser.id.in_(org_user_ids)))
-        ).scalars().all()
-        for u in rows:
-            actors[str(u.id)] = ActorInfo(
-                id=str(u.id), type="org_user", name=u.name, email=u.email
+        org_rows = (
+            (await db.execute(select(OrgUser).where(OrgUser.id.in_(org_user_ids)))).scalars().all()
+        )
+        for org_user in org_rows:
+            actors[str(org_user.id)] = ActorInfo(
+                id=str(org_user.id), type="org_user", name=org_user.name, email=org_user.email
             )
 
     if api_key_ids:
-        rows = (
-            await db.execute(select(ApiKey).where(ApiKey.id.in_(api_key_ids)))
-        ).scalars().all()
-        for k in rows:
-            actors[str(k.id)] = ActorInfo(
-                id=str(k.id), type="api_key", name=k.name, email=None
-            )
+        api_key_rows = (
+            (await db.execute(select(ApiKey).where(ApiKey.id.in_(api_key_ids)))).scalars().all()
+        )
+        for k in api_key_rows:
+            actors[str(k.id)] = ActorInfo(id=str(k.id), type="api_key", name=k.name, email=None)
 
     return actors
 

@@ -33,12 +33,16 @@ async def _champions_from_db(db: AsyncSession) -> dict | None:
     from app.models.model_version import ModelStatus, ModelVersion
 
     rows = (
-        await db.execute(
-            select(ModelVersion)
-            .where(ModelVersion.status == ModelStatus.PRODUCTION)
-            .order_by(ModelVersion.promoted_at.desc().nullslast())
+        (
+            await db.execute(
+                select(ModelVersion)
+                .where(ModelVersion.status == ModelStatus.PRODUCTION)
+                .order_by(ModelVersion.promoted_at.desc().nullslast())
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         return None
 
@@ -52,19 +56,23 @@ async def _champions_from_db(db: AsyncSession) -> dict | None:
         ts = mv.promoted_at or mv.created_at
         if ts and (latest is None or ts > latest):
             latest = ts
-        models.append({
-            "model_type": mv.model_type,
-            "registry_name": f"{mv.model_type}_model",
-            "version": str(mv.version),
-            "status": mv.status.value if hasattr(mv.status, "value") else mv.status,
-            "created_at": (mv.created_at.isoformat().replace("+00:00", "Z")
-                           if mv.created_at else None),
-            "promoted_at": (mv.promoted_at.isoformat().replace("+00:00", "Z")
-                            if mv.promoted_at else None),
-            "metrics": mv.metrics or {},
-            "feature_count": mv.feature_count,
-            "training_id": mv.training_id,
-        })
+        models.append(
+            {
+                "model_type": mv.model_type,
+                "registry_name": f"{mv.model_type}_model",
+                "version": str(mv.version),
+                "status": mv.status.value if hasattr(mv.status, "value") else mv.status,
+                "created_at": (
+                    mv.created_at.isoformat().replace("+00:00", "Z") if mv.created_at else None
+                ),
+                "promoted_at": (
+                    mv.promoted_at.isoformat().replace("+00:00", "Z") if mv.promoted_at else None
+                ),
+                "metrics": mv.metrics or {},
+                "feature_count": mv.feature_count,
+                "training_id": mv.training_id,
+            }
+        )
 
     return {
         "updated_at": (latest.isoformat().replace("+00:00", "Z") if latest else None),
@@ -100,10 +108,7 @@ async def get_current_champion_model(
             status_code=404,
             content={
                 "error": "not_found",
-                "detail": (
-                    "Champion metadata not available yet. "
-                    "No training run has completed."
-                ),
+                "detail": ("Champion metadata not available yet. No training run has completed."),
             },
         )
 

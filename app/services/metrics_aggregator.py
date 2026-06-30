@@ -12,12 +12,11 @@ All functions accept a DB session and return dicts matching the response schemas
 from __future__ import annotations
 
 import logging
-import math
 import statistics
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import case, cast, func, select, text, Float, Integer
+from sqlalchemy import Float, Integer, case, cast, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.thresholds import ALERT_THRESHOLDS, check_threshold
@@ -54,11 +53,11 @@ BUCKET_MINUTES = {
 def _period_start(period: str) -> datetime:
     """Compute the start timestamp for a given period string."""
     delta = PERIOD_DELTA.get(period, timedelta(hours=24))
-    return datetime.now(timezone.utc) - delta
+    return datetime.now(UTC) - delta
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _safe_pct(numerator: int, denominator: int) -> float:
@@ -104,8 +103,7 @@ async def get_infrastructure_metrics(
     )
     vol_result = await db.execute(vol_q)
     by_endpoint = [
-        {"endpoint": r.endpoint, "method": r.method, "count": r.count}
-        for r in vol_result
+        {"endpoint": r.endpoint, "method": r.method, "count": r.count} for r in vol_result
     ]
 
     # ── Overall latency percentiles ───────────────────────────────────────
@@ -123,15 +121,9 @@ async def get_infrastructure_metrics(
     lat_by_ep_q = (
         select(
             RequestMetric.endpoint,
-            func.percentile_cont(0.5).within_group(
-                RequestMetric.response_time_ms
-            ).label("p50"),
-            func.percentile_cont(0.95).within_group(
-                RequestMetric.response_time_ms
-            ).label("p95"),
-            func.percentile_cont(0.99).within_group(
-                RequestMetric.response_time_ms
-            ).label("p99"),
+            func.percentile_cont(0.5).within_group(RequestMetric.response_time_ms).label("p50"),
+            func.percentile_cont(0.95).within_group(RequestMetric.response_time_ms).label("p95"),
+            func.percentile_cont(0.99).within_group(RequestMetric.response_time_ms).label("p99"),
         )
         .where(*base_filter)
         .group_by(RequestMetric.endpoint)
@@ -166,11 +158,11 @@ async def get_infrastructure_metrics(
     error_by_status = await db.execute(error_by_status_q)
     by_status = [
         {
-            "status_code": r.status_code,
-            "count": r.count,
-            "pct": _safe_pct(r.count, total_count),
+            "status_code": status_code,
+            "count": count,
+            "pct": _safe_pct(count, total_count),
         }
-        for r in error_by_status
+        for status_code, count in error_by_status
     ]
 
     # ── Timeseries ────────────────────────────────────────────────────────
@@ -223,9 +215,7 @@ async def _build_infra_timeseries(
 
     # Floor to bucket boundary: to_timestamp(floor(epoch / bucket_s) * bucket_s)
     epoch_expr = func.extract("epoch", RequestMetric.timestamp).cast(Integer)
-    bucket_expr = func.to_timestamp(
-        (epoch_expr / bucket_seconds) * bucket_seconds
-    ).label("bucket")
+    bucket_expr = func.to_timestamp((epoch_expr / bucket_seconds) * bucket_seconds).label("bucket")
 
     ts_q = (
         select(
@@ -237,9 +227,7 @@ async def _build_infra_timeseries(
                     else_=None,
                 )
             ).label("errors"),
-            func.percentile_cont(0.99).within_group(
-                RequestMetric.response_time_ms
-            ).label("p99"),
+            func.percentile_cont(0.99).within_group(RequestMetric.response_time_ms).label("p99"),
         )
         .where(*base_filter)
         .group_by(text("bucket"))
@@ -297,7 +285,7 @@ async def get_risk_metrics(
         .group_by(DecisionMetric.decision)
     )
     decision_result = await db.execute(decision_q)
-    decision_counts = {r.decision: r.count for r in decision_result}
+    decision_counts = {decision: count for decision, count in decision_result}
 
     approve = decision_counts.get("APPROVE", 0)
     conditional = decision_counts.get("CONDITIONAL_APPROVE", 0)
@@ -322,12 +310,12 @@ async def get_risk_metrics(
         select(
             DecisionMetric.score_grade,
             func.count(DecisionMetric.id).label("total"),
-            func.count(
-                case((DecisionMetric.decision == "APPROVE", 1), else_=None)
-            ).label("approve_count"),
-            func.count(
-                case((DecisionMetric.decision == "DECLINE", 1), else_=None)
-            ).label("decline_count"),
+            func.count(case((DecisionMetric.decision == "APPROVE", 1), else_=None)).label(
+                "approve_count"
+            ),
+            func.count(case((DecisionMetric.decision == "DECLINE", 1), else_=None)).label(
+                "decline_count"
+            ),
         )
         .where(*base_filter)
         .where(DecisionMetric.score_grade.is_not(None))
@@ -337,12 +325,12 @@ async def get_risk_metrics(
     grade_result = await db.execute(grade_q)
     by_grade = [
         {
-            "grade": r.score_grade,
-            "total": r.total,
-            "approve_rate_pct": _safe_pct(r.approve_count, r.total),
-            "decline_rate_pct": _safe_pct(r.decline_count, r.total),
+            "grade": grade,
+            "total": grade_total,
+            "approve_rate_pct": _safe_pct(approve_count, grade_total),
+            "decline_rate_pct": _safe_pct(decline_count, grade_total),
         }
-        for r in grade_result
+        for grade, grade_total, approve_count, decline_count in grade_result
     ]
 
     # ── Score distribution ────────────────────────────────────────────────
@@ -367,27 +355,22 @@ async def get_risk_metrics(
         .group_by(DecisionMetric.risk_tier)
     )
     tier_result = await db.execute(tier_q)
-    tier_data = [(r.risk_tier, r.count) for r in tier_result]
+    tier_data = [(tier, count) for tier, count in tier_result]
     tier_total = sum(c for _, c in tier_data)
-    risk_tiers = [
-        {"tier": t, "count": c, "pct": _safe_pct(c, tier_total)}
-        for t, c in tier_data
-    ]
+    risk_tiers = [{"tier": t, "count": c, "pct": _safe_pct(c, tier_total)} for t, c in tier_data]
 
     # ── Timeseries ────────────────────────────────────────────────────────
     ts_q = (
         select(
             func.date_trunc("day", DecisionMetric.timestamp).label("bucket"),
             func.count(DecisionMetric.id).label("total_decisions"),
-            func.count(
-                case((DecisionMetric.decision == "APPROVE", 1), else_=None)
-            ).label("approve_count"),
-            func.count(
-                case((DecisionMetric.decision == "DECLINE", 1), else_=None)
-            ).label("decline_count"),
-            func.avg(
-                cast(DecisionMetric.credit_score, Float)
-            ).label("mean_score"),
+            func.count(case((DecisionMetric.decision == "APPROVE", 1), else_=None)).label(
+                "approve_count"
+            ),
+            func.count(case((DecisionMetric.decision == "DECLINE", 1), else_=None)).label(
+                "decline_count"
+            ),
+            func.avg(cast(DecisionMetric.credit_score, Float)).label("mean_score"),
         )
         .where(*base_filter)
         .group_by("bucket")
@@ -396,33 +379,30 @@ async def get_risk_metrics(
     ts_result = await db.execute(ts_q)
     timeseries = [
         {
-            "bucket": r.bucket.strftime("%Y-%m-%d") if r.bucket else "",
-            "total_decisions": r.total_decisions,
-            "approve_rate_pct": _safe_pct(r.approve_count, r.total_decisions),
-            "decline_rate_pct": _safe_pct(r.decline_count, r.total_decisions),
-            "mean_credit_score": round(r.mean_score or 0, 0),
+            "bucket": bucket.strftime("%Y-%m-%d") if bucket else "",
+            "total_decisions": total_decisions,
+            "approve_rate_pct": _safe_pct(approve_count, total_decisions),
+            "decline_rate_pct": _safe_pct(decline_count, total_decisions),
+            "mean_credit_score": round(mean_score or 0, 0),
         }
-        for r in ts_result
+        for bucket, total_decisions, approve_count, decline_count, mean_score in ts_result
     ]
 
     # ── 7-day shift alert ─────────────────────────────────────────────────
     current_approve_rate = _safe_pct(approve, total)
     prior_start = start - PERIOD_DELTA.get(period, timedelta(days=7))
-    prior_q = (
-        select(
-            func.count(DecisionMetric.id).label("total"),
-            func.count(
-                case((DecisionMetric.decision == "APPROVE", 1), else_=None)
-            ).label("approve_count"),
-        )
-        .where(
-            DecisionMetric.timestamp >= prior_start,
-            DecisionMetric.timestamp < start,
-        )
+    prior_q = select(
+        func.count(DecisionMetric.id).label("total"),
+        func.count(case((DecisionMetric.decision == "APPROVE", 1), else_=None)).label(
+            "approve_count"
+        ),
+    ).where(
+        DecisionMetric.timestamp >= prior_start,
+        DecisionMetric.timestamp < start,
     )
     prior_result = await db.execute(prior_q)
-    prior = prior_result.one()
-    prior_rate = _safe_pct(prior.approve_count, prior.total)
+    prior_total, prior_approve_count = prior_result.one()
+    prior_rate = _safe_pct(prior_approve_count, prior_total)
     shift = abs(current_approve_rate - prior_rate)
 
     alerts = [
@@ -517,14 +497,18 @@ async def get_model_ops_metrics(
     retraining_history = []
     for r in retrain_result.scalars():
         metrics = r.metrics or {}
-        retraining_history.append({
-            "training_id": r.training_id or "",
-            "completed_at": r.timestamp.isoformat().replace("+00:00", "Z") if r.timestamp else "",
-            "model_type": r.model_type,
-            "result": metrics.get("result", "unknown"),
-            "metrics_before": metrics.get("metrics_before", {}),
-            "metrics_after": metrics.get("metrics_after", {}),
-        })
+        retraining_history.append(
+            {
+                "training_id": r.training_id or "",
+                "completed_at": r.timestamp.isoformat().replace("+00:00", "Z")
+                if r.timestamp
+                else "",
+                "model_type": r.model_type,
+                "result": metrics.get("result", "unknown"),
+                "metrics_before": metrics.get("metrics_before", {}),
+                "metrics_after": metrics.get("metrics_after", {}),
+            }
+        )
 
     # ── Score distribution PSI ────────────────────────────────────────────
     psi_q = (
@@ -538,7 +522,9 @@ async def get_model_ops_metrics(
     for r in psi_result.scalars():
         metrics = r.metrics or {}
         psi_val = metrics.get("psi", 0.0)
-        status = "alert" if psi_val > ALERT_THRESHOLDS["score_distribution_psi"]["threshold"] else "ok"
+        status = (
+            "alert" if psi_val > ALERT_THRESHOLDS["score_distribution_psi"]["threshold"] else "ok"
+        )
         score_psi.append({"model_type": r.model_type, "psi": psi_val, "status": status})
 
     # ── Alerts ────────────────────────────────────────────────────────────
@@ -546,24 +532,28 @@ async def get_model_ops_metrics(
     # Feature drift alerts
     for fd in feature_drift:
         if fd["status"] == "alert":
-            alerts.append({
-                "metric": "feature_drift_psi",
-                "feature": fd["feature"],
-                "current_value": fd["psi"],
-                "threshold": ALERT_THRESHOLDS["feature_drift_psi"]["threshold"],
-                "status": "firing",
-            })
+            alerts.append(
+                {
+                    "metric": "feature_drift_psi",
+                    "feature": fd["feature"],
+                    "current_value": fd["psi"],
+                    "threshold": ALERT_THRESHOLDS["feature_drift_psi"]["threshold"],
+                    "status": "firing",
+                }
+            )
 
     # Score distribution alerts
     for sp in score_psi:
         if sp["status"] == "alert":
-            alerts.append({
-                "metric": "score_distribution_psi",
-                "model_type": sp["model_type"],
-                "current_value": sp["psi"],
-                "threshold": ALERT_THRESHOLDS["score_distribution_psi"]["threshold"],
-                "status": "firing",
-            })
+            alerts.append(
+                {
+                    "metric": "score_distribution_psi",
+                    "model_type": sp["model_type"],
+                    "current_value": sp["psi"],
+                    "threshold": ALERT_THRESHOLDS["score_distribution_psi"]["threshold"],
+                    "status": "firing",
+                }
+            )
 
     return {
         "period": period,
@@ -596,6 +586,7 @@ async def get_compliance_metrics(
     ]
 
     age_data = []
+    rates_with_data: list[float] = []
     for label, lo, hi in age_groups:
         age_filter = base_filter + [
             DecisionMetric.applicant_age >= lo,
@@ -611,9 +602,10 @@ async def get_compliance_metrics(
 
         rate = _safe_pct(approves, total)
         age_data.append({"group": label, "approval_rate_pct": rate, "count": total})
+        if total > 0:
+            rates_with_data.append(rate)
 
     # Max disparity between any two groups (with non-zero counts)
-    rates_with_data = [a["approval_rate_pct"] for a in age_data if a["count"] > 0]
     max_disparity = 0.0
     if len(rates_with_data) >= 2:
         max_disparity = round(max(rates_with_data) - min(rates_with_data), 1)
@@ -702,12 +694,7 @@ async def get_alerts(
     if severity_filter:
         filters.append(Alert.severity == severity_filter)
 
-    q = (
-        select(Alert)
-        .where(*filters)
-        .order_by(Alert.created_at.desc())
-        .limit(limit)
-    )
+    q = select(Alert).where(*filters).order_by(Alert.created_at.desc()).limit(limit)
     result = await db.execute(q)
     alert_rows = result.scalars().all()
 
@@ -726,9 +713,7 @@ async def get_alerts(
             "recommended_action": a.recommended_action,
             "created_at": a.created_at.isoformat().replace("+00:00", "Z") if a.created_at else "",
             "resolved_at": (
-                a.resolved_at.isoformat().replace("+00:00", "Z")
-                if a.resolved_at
-                else None
+                a.resolved_at.isoformat().replace("+00:00", "Z") if a.resolved_at else None
             ),
         }
         for a in alert_rows

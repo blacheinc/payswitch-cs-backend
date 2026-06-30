@@ -45,8 +45,7 @@ def test_matrix_only_references_declared_platform_codes():
     for role_name, codes in SYSTEM_PLATFORM_ROLES.items():
         unknown = codes - ALL_PLATFORM_PERMISSION_CODES
         assert not unknown, (
-            f"Role {role_name!r} references unknown permission codes: "
-            f"{sorted(unknown)}"
+            f"Role {role_name!r} references unknown permission codes: {sorted(unknown)}"
         )
 
 
@@ -78,8 +77,10 @@ def _extract_require_permission_codes(path: Path) -> set[str]:
             continue
         func = node.func
         func_name = (
-            func.attr if isinstance(func, ast.Attribute)
-            else func.id if isinstance(func, ast.Name)
+            func.attr
+            if isinstance(func, ast.Attribute)
+            else func.id
+            if isinstance(func, ast.Name)
             else None
         )
         if func_name != "require_permission":
@@ -105,8 +106,7 @@ def test_every_enforced_platform_permission_is_catalogued():
             if code not in catalog_codes:
                 missing.setdefault(str(path.relative_to(REPO_ROOT)), set()).add(code)
     assert not missing, (
-        "Routers enforce permission codes that aren't in the seeder catalog: "
-        f"{missing}"
+        f"Routers enforce permission codes that aren't in the seeder catalog: {missing}"
     )
 
 
@@ -145,11 +145,7 @@ def test_every_enforced_platform_permission_is_catalogued():
     ],
 )
 def test_dashboard_permissions_granted_to_expected_roles(perm_code, expected_roles):
-    actual = {
-        role_name
-        for role_name, codes in SYSTEM_PLATFORM_ROLES.items()
-        if perm_code in codes
-    }
+    actual = {role_name for role_name, codes in SYSTEM_PLATFORM_ROLES.items() if perm_code in codes}
     assert actual == expected_roles, (
         f"{perm_code!r} is granted to {actual}; expected {expected_roles}"
     )
@@ -170,13 +166,9 @@ def test_dashboard_permissions_granted_to_expected_roles(perm_code, expected_rol
 def test_administration_permissions_restricted_to_super_admin(admin_only_code):
     """Org mutation and platform-role management stay in SUPER_ADMIN only."""
     holders = {
-        role_name
-        for role_name, codes in SYSTEM_PLATFORM_ROLES.items()
-        if admin_only_code in codes
+        role_name for role_name, codes in SYSTEM_PLATFORM_ROLES.items() if admin_only_code in codes
     }
-    assert holders == {"SUPER_ADMIN"}, (
-        f"{admin_only_code!r} leaked to {holders - {'SUPER_ADMIN'}}"
-    )
+    assert holders == {"SUPER_ADMIN"}, f"{admin_only_code!r} leaked to {holders - {'SUPER_ADMIN'}}"
 
 
 @pytest.mark.parametrize(
@@ -197,11 +189,5 @@ def test_administration_permissions_restricted_to_super_admin(admin_only_code):
 )
 def test_cross_org_read_permissions_match_personas(perm_code, expected_holders):
     """Verify cross-org read perms only land on the personas that need them."""
-    actual = {
-        role_name
-        for role_name, codes in SYSTEM_PLATFORM_ROLES.items()
-        if perm_code in codes
-    }
-    assert actual == expected_holders, (
-        f"{perm_code!r} → expected {expected_holders}, got {actual}"
-    )
+    actual = {role_name for role_name, codes in SYSTEM_PLATFORM_ROLES.items() if perm_code in codes}
+    assert actual == expected_holders, f"{perm_code!r} → expected {expected_holders}, got {actual}"

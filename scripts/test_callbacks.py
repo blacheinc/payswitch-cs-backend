@@ -2,15 +2,16 @@ import asyncio
 import os
 import sys
 import uuid
+
 import httpx
 
 # Add project root to path for imports
 sys.path.append(os.getcwd())
 
 # Configuration
-BASE_URL = "http://localhost:8000"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 # ANSI Colors
 C_GREEN = "\033[92m"
@@ -26,11 +27,8 @@ INFO = f"{C_BLUE}ℹ{C_RESET}"
 async def main():
     print(f"{INFO} Starting Callback Test Script...")
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=30.0) as client:
-
         # 1. Admin Login
-        resp = await client.post(
-            "/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS}
-        )
+        resp = await client.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS})
         if resp.status_code != 200:
             print(f"{FAIL} Admin Login Failed")
             return
@@ -58,7 +56,7 @@ async def main():
         )
         if resp.status_code == 200:
             print(f"{CHECK} Provisioned Org with callback")
-            # We check logs later for "use it for the welcome email link" (implicit in TODO or code?)
+            # A 200 confirms the callback-bearing provision request was accepted.
             # Wait, I didn't add a print statement in provision_organization.
             # I added: "callback_url = body.callback_url if body else None"
             # But I verified the code compiles.
@@ -75,7 +73,7 @@ async def main():
 
         # To test Invite User, I need an Org User token.
         # I'll seed one manually like in full api test.
-        # Or I can use "Forgot Password" validation first since it doesn't need auth (public endpoint).
+        # Forgot Password is public, so it can still validate callback handling.
 
         # 5. Forgot Password with Callback
         fp_payload = {

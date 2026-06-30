@@ -11,6 +11,7 @@ This module centralises that decision and writes an :class:`AuditLog`
 row whenever an admin reads data they don't own — so cross-org access
 leaves a deliberate trail without each handler having to remember.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -80,9 +81,8 @@ async def resolve_org_filter(
     """
     requested_org_uuid = _coerce_uuid(requested_org_id)
     is_admin = auth.user_type == "admin"
-    has_admin_perm = bool(auth.permissions) and (
-        "*" in auth.permissions or admin_permission in auth.permissions
-    )
+    permissions = auth.permissions or set()
+    has_admin_perm = "*" in permissions or admin_permission in permissions
 
     # ── Admin path ───────────────────────────────────────────────────────
     if is_admin:
@@ -97,7 +97,8 @@ async def resolve_org_filter(
 
         if requested_org_uuid is not None:
             await _audit_cross_org_read(
-                db, auth,
+                db,
+                auth,
                 organization_id=requested_org_uuid,
                 resource_type=resource_type,
                 description=f"Admin scoped read of {resource_type} for org {requested_org_uuid}",
@@ -106,7 +107,8 @@ async def resolve_org_filter(
 
         # Cross-org read — also audit-logged because it's privileged.
         await _audit_cross_org_read(
-            db, auth,
+            db,
+            auth,
             organization_id=None,
             resource_type=resource_type,
             description=f"Admin cross-org read of {resource_type}",
@@ -124,9 +126,7 @@ async def resolve_org_filter(
         return OrgFilter(organization_id=own_org, cross_org=False)
 
     if str(requested_org_uuid) != str(own_org):
-        raise AuthorizationError(
-            "Cross-organisation reads require admin permission"
-        )
+        raise AuthorizationError("Cross-organisation reads require admin permission")
 
     return OrgFilter(organization_id=own_org, cross_org=False)
 
@@ -142,16 +142,18 @@ async def _audit_cross_org_read(
     """Persist a single audit row for an admin cross-org read."""
     from app.models.audit import AuditLog
 
-    db.add(AuditLog(
-        actor_type="admin",
-        actor_id=str(auth.user_id) if auth.user_id else None,
-        actor_email=auth.user_email,
-        organization_id=str(organization_id) if organization_id else None,
-        action=f"{resource_type}.read_cross_org",
-        resource_type=resource_type,
-        resource_id=str(organization_id) if organization_id else None,
-        description=description,
-    ))
+    db.add(
+        AuditLog(
+            actor_type="admin",
+            actor_id=str(auth.user_id) if auth.user_id else None,
+            actor_email=auth.user_email,
+            organization_id=str(organization_id) if organization_id else None,
+            action=f"{resource_type}.read_cross_org",
+            resource_type=resource_type,
+            resource_id=str(organization_id) if organization_id else None,
+            description=description,
+        )
+    )
     # Don't await commit here — the caller's transaction will commit on
     # request success, and on failure we'd rather not record a read that
     # never returned data.

@@ -4,9 +4,8 @@
 # succeed before applying the new Deployment.  Failed migrations block
 # traffic from ever touching the new image.
 #
-# Mechanically equivalent to the migration step in entrypoint.sh, just
-# explicit and visible in the Argo UI.  When this Job runs first, the
-# subsequent pod start re-runs `alembic upgrade head` as a no-op.
+# This hook is the sole migration/bootstrap owner. Application pods have
+# RUN_DB_MIGRATIONS and RUN_BOOTSTRAP_ADMIN disabled in the ConfigMap.
 #
 # Idempotent: Argo deletes + recreates the Job on every sync because of
 # the BeforeHookCreation policy below, so the Job name doesn't need to
@@ -29,16 +28,39 @@ spec:
         app.kubernetes.io/component: migrate
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: migrate
           image: registry.gitlab.com/your-org/payswitch-credit-scoring:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
           # Skip the entrypoint's bootstrap-admin step — only run migrations.
-          command: ["alembic", "upgrade", "head"]
+          command:
+            - "sh"
+            - "-c"
+            - "alembic upgrade head && python scripts/create_superuser.py"
           envFrom:
             - configMapRef:
                 name: payswitch-config
             - secretRef:
                 name: payswitch-secrets
+          env:
+            # Prevent the image entrypoint from running these before the Job's
+            # explicit command. The command above remains the single owner.
+            - name: RUN_DB_MIGRATIONS
+              value: "false"
+            - name: RUN_BOOTSTRAP_ADMIN
+              value: "false"
           resources:
             requests:
               cpu: "100m"
@@ -46,3 +68,9 @@ spec:
             limits:
               cpu: "500m"
               memory: "512Mi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from app.config import get_settings
 
@@ -50,12 +50,11 @@ def read_champion_metadata() -> dict[str, Any] | None:
 
     try:
         with BlobServiceClient.from_connection_string(conn_str) as svc:
-            blob_client = (
-                svc.get_container_client(settings.champion_storage_container)
-                   .get_blob_client(_CHAMPION_BLOB_PATH)
-            )
+            blob_client = svc.get_container_client(
+                settings.champion_storage_container
+            ).get_blob_client(_CHAMPION_BLOB_PATH)
             content = blob_client.download_blob().readall()
-            return json.loads(content.decode("utf-8"))
+            return cast(dict[str, Any], json.loads(content.decode("utf-8")))
 
     except Exception as e:
         name = type(e).__name__

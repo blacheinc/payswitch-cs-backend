@@ -44,7 +44,4 @@ class ModelMetric(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<ModelMetric {self.model_type} v{self.model_version} "
-            f"type={self.metric_type}>"
-        )
+        return f"<ModelMetric {self.model_type} v{self.model_version} type={self.metric_type}>"

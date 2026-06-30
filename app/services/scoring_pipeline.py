@@ -6,7 +6,6 @@ hard-stop signal extraction and DE inference dispatch logic stay in one place.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -46,11 +45,7 @@ def extract_hard_stop_signals(
         return None
 
     # ── Delinquency rating (HS-06) ────────────────────────────────────────
-    _del_obj = (
-        p45.get("highestDelinquencyRating")
-        or p49.get("highestDelinquencyRating")
-        or {}
-    )
+    _del_obj = p45.get("highestDelinquencyRating") or p49.get("highestDelinquencyRating") or {}
     if isinstance(_del_obj, list) and _del_obj:
         _del_obj = _del_obj[0]
     if isinstance(_del_obj, dict):
@@ -135,15 +130,15 @@ def extract_hard_stop_signals(
             if _bd:
                 today = date.today()
                 applicant_age = (
-                    today.year - _bd.year
-                    - ((today.month, today.day) < (_bd.month, _bd.day))
+                    today.year - _bd.year - ((today.month, today.day) < (_bd.month, _bd.day))
                 )
 
     # Fall back to the DOB the caller provided if XDS didn't return one
     if applicant_age is None and date_of_birth:
         today = date.today()
         applicant_age = (
-            today.year - date_of_birth.year
+            today.year
+            - date_of_birth.year
             - ((today.month, today.day) < (date_of_birth.month, date_of_birth.day))
         )
 
@@ -183,13 +178,12 @@ async def fire_de_inference(tracking_id: str, de_payload: dict[str, Any]) -> Non
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(url, json=de_payload)
             if resp.status_code in (200, 201, 202):
-                logger.info(
-                    "[pipeline] Published %s to DE inference", tracking_id
-                )
+                logger.info("[pipeline] Published %s to DE inference", tracking_id)
             else:
                 logger.error(
                     "[pipeline] DE inference call failed (%d): %s",
-                    resp.status_code, resp.text,
+                    resp.status_code,
+                    resp.text,
                 )
     except Exception as e:
         logger.error("[pipeline] DE inference call threw exception: %s", e)

@@ -16,7 +16,6 @@ Updated for the new contract — per-model results instead of monolithic:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -100,9 +99,7 @@ async def handle_model_training_completed(message: dict[str, Any]) -> None:
                 model_version.training_id = training_id
                 model_version.metrics = model_metrics
                 model_version.training_status = model_status_str
-                model_version.training_duration_seconds = message.get(
-                    "training_duration_seconds"
-                )
+                model_version.training_duration_seconds = message.get("training_duration_seconds")
                 model_version.trained_at = utcnow()
                 model_version.dataset_info = message.get("dataset_info")
 
@@ -116,19 +113,19 @@ async def handle_model_training_completed(message: dict[str, Any]) -> None:
 
                 # Write training history record immediately (feeds model-ops retraining table)
                 if model_status_str.lower() in ("success", "complete"):
-                    db.add(ModelMetric(
-                        model_type=model_type,
-                        model_version=model_version_str,
-                        training_id=training_id,
-                        metric_type="training",
-                        metrics=model_metrics,
-                        timestamp=utcnow(),
-                    ))
+                    db.add(
+                        ModelMetric(
+                            model_type=model_type,
+                            model_version=model_version_str,
+                            training_id=training_id,
+                            metric_type="training",
+                            metrics=model_metrics,
+                            timestamp=utcnow(),
+                        )
+                    )
 
             # Update TrainingUpload
-            result = await db.execute(
-                select(TrainingUpload).where(TrainingUpload.id == upload_id)
-            )
+            result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
             upload = result.scalar_one_or_none()
             if upload:
                 if training_id:
@@ -143,20 +140,17 @@ async def handle_model_training_completed(message: dict[str, Any]) -> None:
                     dataset_info = message.get("dataset_info", {})
                     errors = dataset_info.get("errors", [])
                     upload.error_message = (
-                        f"Training failed: {', '.join(errors)}" if errors
+                        f"Training failed: {', '.join(errors)}"
+                        if errors
                         else f"Training failed: {training_status}"
                     )
                 else:
                     # Partial success — some models succeeded, some didn't
                     upload.status = UploadStatus.TRAINED
                     upload.completed_at = utcnow()
-                    upload.error_message = (
-                        "Partial training success — not all models succeeded"
-                    )
+                    upload.error_message = "Partial training success — not all models succeeded"
             else:
-                logger.warning(
-                    f"[model-training-completed] TrainingUpload {upload_id} not found"
-                )
+                logger.warning(f"[model-training-completed] TrainingUpload {upload_id} not found")
 
     logger.info(
         f"[model-training-completed] Saved {len(created_versions)} ModelVersions: "

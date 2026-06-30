@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, String, Text, func
+from sqlalchemy import DateTime, Float, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -20,9 +20,7 @@ class Alert(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "alerts"
 
     # Human-readable alert ID (e.g. "ALT-20260414-001")
-    alert_id: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    alert_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
 
     # What metric triggered this alert
     metric: Mapped[str] = mapped_column(String(100), nullable=False, index=True)

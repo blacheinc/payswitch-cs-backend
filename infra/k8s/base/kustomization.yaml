@@ -23,9 +23,11 @@ resources:
 
 namespace: payswitch-credit-scoring
 
-commonLabels:
-  app.kubernetes.io/part-of: payswitch
-  app.kubernetes.io/managed-by: argocd
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: payswitch
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: true
 
 # Image tag substitution — the GitLab CI pipeline patches this on every
 # successful build (see infra/k8s/gitlab-ci.example.yml).

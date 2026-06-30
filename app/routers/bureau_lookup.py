@@ -8,7 +8,7 @@ Two-step scoring flow:
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Annotated, Any
 
 import httpx
@@ -54,6 +54,7 @@ async def bureau_lookup(
 
     # ── Check cache first to avoid redundant XDS API calls ────────────
     import json as _json
+
     from app.storage.cache import get_redis_cache
 
     _cached_result: dict | None = None
@@ -62,15 +63,19 @@ async def bureau_lookup(
 
     # ── Demo simulation: serve a stored XDS report instead of calling XDS ──
     from app.config import get_settings as _get_settings
+
     _settings = _get_settings()
     if _settings.demo_simulation_mode:
         import asyncio as _asyncio
-        import random as _random
+        import secrets as _secrets
 
         from app.demo.simulation_records import get_simulation_report
 
         # Feel like a real bureau call rather than an instant lookup.
-        _delay = max(0.0, _settings.demo_bureau_delay_seconds + _random.uniform(-0.4, 0.6))
+        _delay = max(
+            0.0,
+            _settings.demo_bureau_delay_seconds + _secrets.SystemRandom().uniform(-0.4, 0.6),
+        )
         if _delay:
             await _asyncio.sleep(_delay)
 
@@ -95,7 +100,9 @@ async def bureau_lookup(
             _cached_bytes = await _cache.get(_cache_key_id)
             if _cached_bytes:
                 _cached_result = _json.loads(_cached_bytes)
-                logger.info(f"[bureau-lookup] Cache HIT for {_cache_key_id} — skipping XDS API call")
+                logger.info(
+                    f"[bureau-lookup] Cache HIT for {_cache_key_id} — skipping XDS API call"
+                )
         except Exception as e:
             logger.warning(f"[bureau-lookup] Cache check failed: {e}")
 
@@ -262,9 +269,7 @@ async def bureau_lookup(
 # ── Private helpers ──────────────────────────────────────────────────────────
 
 
-def _extract_personal_details(
-    p45: dict[str, Any], match: dict[str, Any]
-) -> BureauPersonalDetails:
+def _extract_personal_details(p45: dict[str, Any], match: dict[str, Any]) -> BureauPersonalDetails:
     """Extract personal details from Product 45 report."""
     personal = p45.get("personalDetailsSummary", p45.get("personalDetails", {}))
     if isinstance(personal, list) and personal:
@@ -305,10 +310,7 @@ def _extract_credit_summary(p45: dict[str, Any]) -> BureauCreditSummary | None:
         delinquency_obj = delinquency_obj[0]
     elif not isinstance(delinquency_obj, dict):
         delinquency_obj = {}
-    del_rating = (
-        delinquency_obj.get("highestDelinquencyRating")
-        or summary.get("rating")
-    )
+    del_rating = delinquency_obj.get("highestDelinquencyRating") or summary.get("rating")
 
     return BureauCreditSummary(
         total_accounts=_safe_int(summary.get("totalNumberofAccountsGHS")),
@@ -349,10 +351,7 @@ def _extract_credit_accounts(
         if isinstance(payment_data, list):
             for ph in payment_data:
                 if isinstance(ph, dict) and ph.get("accountNo") == acct.get("accountNo"):
-                    payment_history = [
-                        ph.get(f"m{str(i).zfill(2)}", "#")
-                        for i in range(1, 25)
-                    ]
+                    payment_history = [ph.get(f"m{str(i).zfill(2)}", "#") for i in range(1, 25)]
                     break
 
         accounts.append(
@@ -408,16 +407,16 @@ def _extract_credit_accounts(
     return accounts
 
 
-def _extract_features(
-    p45: dict[str, Any], p49: dict[str, Any]
-) -> BureauFeatures:
+def _extract_features(p45: dict[str, Any], p49: dict[str, Any]) -> BureauFeatures:
     """Extract the 30 raw feature values exclusively from XDS product 45/49.
 
     ALL data comes from the XDS report — nothing from the request body.
     Values are raw (not binned) — the DE pipeline handles normalisation.
     See docs/de_feature_mapping.md for the full forward/reverse mapping.
     """
-    from datetime import datetime as _dt, timedelta
+    from datetime import datetime as _dt
+    from datetime import timedelta
+
     # ── Summary data (prefer P45, fall back to P49) ─────────────────────
     summary = p45.get("creditAccountSummary", p45.get("creditAccountSummaryGHS", {}))
     if isinstance(summary, list) and summary:
@@ -432,9 +431,11 @@ def _extract_features(
     elif not isinstance(p49_summary, dict):
         p49_summary = {}
 
-    delinquency_obj = p45.get("highestDelinquencyRating") or (
-        p49.get("highestDelinquencyRating") if p49 else None
-    ) or {}
+    delinquency_obj = (
+        p45.get("highestDelinquencyRating")
+        or (p49.get("highestDelinquencyRating") if p49 else None)
+        or {}
+    )
     if isinstance(delinquency_obj, list) and delinquency_obj:
         delinquency_obj = delinquency_obj[0]
     elif not isinstance(delinquency_obj, dict):
@@ -449,11 +450,10 @@ def _extract_features(
     p45_accounts = p45.get("creditAgreementSummary", [])
     if isinstance(p45_accounts, list):
         accounts_raw.extend(a for a in p45_accounts if isinstance(a, dict))
-    p49_accounts = (p49.get("detailedFacilityInfo", []) if p49 else [])
+    p49_accounts = p49.get("detailedFacilityInfo", []) if p49 else []
     if isinstance(p49_accounts, list):
         accounts_raw.extend(a for a in p49_accounts if isinstance(a, dict))
 
-    
     personal = p45.get("personalDetailsSummary", p45.get("personalDetails", {}))
     if isinstance(personal, list) and personal:
         personal = personal[0]
@@ -490,19 +490,13 @@ def _extract_features(
         or None
     )
     arrear_accounts_raw = (
-        summary.get("totalAccountInArrearGHS")
-        or p49_summary.get("totalAccountarrear")
-        or None
+        summary.get("totalAccountInArrearGHS") or p49_summary.get("totalAccountarrear") or None
     )
     total_debt_raw = (
-        summary.get("totalOutstandingdebtGHS")
-        or p49_summary.get("totalOutstandingdebt")
-        or None
+        summary.get("totalOutstandingdebtGHS") or p49_summary.get("totalOutstandingdebt") or None
     )
     total_arrear_raw = (
-        summary.get("totalAmountInArrearGHS")
-        or p49_summary.get("amountarrear")
-        or None
+        summary.get("totalAmountInArrearGHS") or p49_summary.get("amountarrear") or None
     )
     # total_monthly_instalment_ghs — P45 value (str); if P49 also has one, keep P45
     instalment_raw = (
@@ -518,13 +512,6 @@ def _extract_features(
         if isinstance(dud_cheques, list) and len(dud_cheques) > 0:
             bounced_raw = str(len(dud_cheques))
 
-    # For computed values that still need parsed numbers
-    good_accounts = (
-        _safe_int(summary.get("totalaccountinGoodconditionGHS"))
-        or _safe_int(p49_summary.get("totalaccountinGodcondition"))
-        or 0
-    )
-
     # has_judgement — from 45:judgementSummary (non-empty array)
     judgement_list = p45.get("judgementSummary", [])
     has_judgement_val = 1 if (isinstance(judgement_list, list) and len(judgement_list) > 0) else 0
@@ -537,23 +524,28 @@ def _extract_features(
     # num_closed_accounts_good — closed with non-adverse status + closedDate
     bad_statuses = {"W", "G", "L"}
     closed_good = sum(
-        1 for a in accounts_raw
+        1
+        for a in accounts_raw
         if a.get("closedDate") and a.get("accountStatusCode") not in bad_statuses
     )
 
     # product_diversity_score — unique types via accountType/loanType/subscriberName
     product_types = set()
     for a in accounts_raw:
-        ptype = a.get("accountType") or a.get("loanType") or a.get("subscriberName") or a.get("indicatorDescription")
+        ptype = (
+            a.get("accountType")
+            or a.get("loanType")
+            or a.get("subscriberName")
+            or a.get("indicatorDescription")
+        )
         if ptype:
             product_types.add(ptype)
 
     # has_adverse_default — from 45:defaults OR 45:adverseDetails (non-empty)
     defaults_raw = p45.get("defaults", [])
     adverse_raw = p45.get("adverseDetails", [])
-    has_adverse = (
-        (isinstance(defaults_raw, list) and len(defaults_raw) > 0)
-        or (isinstance(adverse_raw, list) and len(adverse_raw) > 0)
+    has_adverse = (isinstance(defaults_raw, list) and len(defaults_raw) > 0) or (
+        isinstance(adverse_raw, list) and len(adverse_raw) > 0
     )
 
     # ── Payment history features (45:accountMonthlyPaymentHistory) ──────
@@ -653,9 +645,6 @@ def _extract_features(
             if eq_date >= _12m_ago:
                 enquiries_12m += 1
 
-
-
-
     # ── Address stability (45:addressHistory) ───────────────────────────
     address_history = p45.get("addressHistory", [])
     address_stability: int | None = None
@@ -711,8 +700,6 @@ def _extract_features(
         enquiry_reason_flags="1" if len(enquiries) > 0 else "0",
         address_stability=str(address_stability) if address_stability is not None else None,
     )
-
-
 
 
 def _safe_int(val: Any) -> int | None:

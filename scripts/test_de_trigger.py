@@ -5,17 +5,19 @@ exact DE payload to the Azure Function inference endpoint.
 Usage:
     python3 scripts/test_de_trigger.py
 """
+
 import asyncio
 import json
-import uuid
-
 import os
+import uuid
 
 import httpx
 
-API_BASE_URL = "http://localhost:8000"
-DE_INFERENCE_URL = "https://blache-cdtscr-dev-transform-y27jgavel2x32.azurewebsites.net/api/transform/inference"
-DE_INFERENCE_CODE = os.environ.get("DE_INFERENCE_CODE", "zpmh_yA-HF5Alfy5MHZafLbxZeeCKtd5R14mzXvIibo3AzFu3w2zSA==")
+API_BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+DE_INFERENCE_URL = os.environ.get("DE_INFERENCE_URL", "")
+DE_INFERENCE_CODE = os.environ.get("DE_INFERENCE_CODE", "")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 
 async def main():
@@ -25,8 +27,8 @@ async def main():
         login_resp = await client.post(
             "/auth/login",
             json={
-                "email": "engineering@opensaucery.africa",
-                "password": "opensaucery",
+                "email": ADMIN_EMAIL,
+                "password": ADMIN_PASSWORD,
             },
         )
         if login_resp.status_code != 200:
@@ -85,29 +87,33 @@ async def main():
         json.dump(de_payload, f, indent=2)
     print(f"\n3. Saved payload to {payload_path}")
 
-    print(f"\n4. Posting payload to DE Azure Function...")
+    print("\n4. Posting payload to DE Azure Function...")
     print(f"   URL: {DE_INFERENCE_URL}")
     print(f"   request_id: {request_id}")
     print(f"   Payload size: {len(json.dumps(de_payload))} bytes")
 
     try:
-        full_url = f"{DE_INFERENCE_URL}?code={DE_INFERENCE_CODE}" if DE_INFERENCE_CODE else DE_INFERENCE_URL
+        full_url = (
+            f"{DE_INFERENCE_URL}?code={DE_INFERENCE_CODE}"
+            if DE_INFERENCE_CODE
+            else DE_INFERENCE_URL
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(full_url, json=de_payload)
 
         print(f"\n   Response: HTTP {resp.status_code}")
         if resp.status_code in (200, 201, 202):
-            print(f"✅ Successfully triggered DE inference!")
+            print("✅ Successfully triggered DE inference!")
             try:
                 print(json.dumps(resp.json(), indent=2))
             except Exception:
                 print(resp.text)
         else:
-            print(f"❌ DE inference call failed")
+            print("❌ DE inference call failed")
             print(f"   {resp.text}")
     except Exception as e:
         print(f"\n❌ Could not reach DE Azure Function: {e}")
-        print(f"   The payload was built successfully — dumping to stdout:\n")
+        print("   The payload was built successfully — dumping to stdout:\n")
         print(json.dumps(de_payload, indent=2))
 
 
