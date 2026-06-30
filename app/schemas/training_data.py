@@ -8,23 +8,18 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 # ── Data Source Schemas ──────────────────────────────────────────────────────
 
 
 class CreateDataSourceRequest(BaseModel):
-    name: str = Field(
-        ..., max_length=200, description="Institution name, e.g. 'GCB Bank'"
-    )
+    name: str = Field(..., max_length=200, description="Institution name, e.g. 'GCB Bank'")
     short_code: str = Field(
         ...,
         max_length=50,
         pattern=r"^[a-z0-9][a-z0-9\-]*$",
         description="URL-safe slug, e.g. 'gcb-bank'",
     )
-    source_type: str = Field(
-        ..., description="bank | bureau | telco | utility | mfi | other"
-    )
+    source_type: str = Field(..., description="bank | bureau | telco | utility | mfi | other")
     description: str | None = None
 
 

@@ -37,13 +37,9 @@ async def create_source(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> DataSourceResponse:
     """Register a new data source (bank/institution)."""
-    existing = await db.execute(
-        select(DataSource).where(DataSource.short_code == body.short_code)
-    )
+    existing = await db.execute(select(DataSource).where(DataSource.short_code == body.short_code))
     if existing.scalar_one_or_none():
-        raise ConflictError(
-            f"Source with short_code '{body.short_code}' already exists"
-        )
+        raise ConflictError(f"Source with short_code '{body.short_code}' already exists")
 
     source = DataSource(
         name=body.name,
@@ -72,24 +68,18 @@ async def list_sources(
 
     if source_type:
         query = query.where(DataSource.source_type == SourceType(source_type))
-        count_query = count_query.where(
-            DataSource.source_type == SourceType(source_type)
-        )
+        count_query = count_query.where(DataSource.source_type == SourceType(source_type))
     if search:
         query = query.where(
-            DataSource.name.ilike(f"%{search}%")
-            | DataSource.short_code.ilike(f"%{search}%")
+            DataSource.name.ilike(f"%{search}%") | DataSource.short_code.ilike(f"%{search}%")
         )
         count_query = count_query.where(
-            DataSource.name.ilike(f"%{search}%")
-            | DataSource.short_code.ilike(f"%{search}%")
+            DataSource.name.ilike(f"%{search}%") | DataSource.short_code.ilike(f"%{search}%")
         )
 
     total = (await db.execute(count_query)).scalar_one()
     result = await db.execute(
-        query.order_by(DataSource.name.asc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        query.order_by(DataSource.name.asc()).offset((page - 1) * per_page).limit(per_page)
     )
     sources = result.scalars().all()
 
@@ -158,9 +148,7 @@ async def get_template(
     return MappingTemplateResponse.model_validate(template)
 
 
-@router.get(
-    "/{source_id}/uploads", response_model=PaginatedResponse[TrainingUploadResponse]
-)
+@router.get("/{source_id}/uploads", response_model=PaginatedResponse[TrainingUploadResponse])
 async def list_source_uploads(
     source_id: UUID,
     _auth: Annotated[AuthContext, Depends(require_permission("admin.sources.read"))],
@@ -170,17 +158,13 @@ async def list_source_uploads(
 ) -> PaginatedResponse[TrainingUploadResponse]:
     """List all uploads for a specific data source."""
     # Verify source exists
-    source_result = await db.execute(
-        select(DataSource).where(DataSource.id == source_id)
-    )
+    source_result = await db.execute(select(DataSource).where(DataSource.id == source_id))
     if not source_result.scalar_one_or_none():
         raise NotFoundError("Data source", str(source_id))
 
     count = (
         await db.execute(
-            select(func.count(TrainingUpload.id)).where(
-                TrainingUpload.data_source_id == source_id
-            )
+            select(func.count(TrainingUpload.id)).where(TrainingUpload.data_source_id == source_id)
         )
     ).scalar_one()
 

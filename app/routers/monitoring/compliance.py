@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from app.dependencies import AuthContext, require_permission
-
 from app.services.metrics_aggregator import get_compliance_metrics
 
 router = APIRouter()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response, status
 
 from app.config import get_settings
 from app.db import engine
@@ -24,7 +24,7 @@ async def health_check() -> HealthResponse:
 
 
 @router.get("/ready", response_model=ReadinessResponse)
-async def readiness_check() -> ReadinessResponse:
+async def readiness_check(response: Response) -> ReadinessResponse:
     """Readiness probe – checks all critical dependencies."""
     checks: dict[str, str] = {}
 
@@ -44,5 +44,7 @@ async def readiness_check() -> ReadinessResponse:
         checks["redis"] = "error: unreachable"
 
     overall_status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    if overall_status != "ok":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
     return ReadinessResponse(status=overall_status, checks=checks)

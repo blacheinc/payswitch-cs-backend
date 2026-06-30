@@ -4,15 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
-    from app.models.user import AdminUser, OrgUser
+    pass
 
 
 class Permission(UUIDPrimaryKeyMixin, Base):
@@ -59,14 +60,14 @@ class Role(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # "platform" or "org"
     scope: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     # None for system roles and platform-scoped custom roles
-    organization_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True, index=True
+    organization_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True, index=True
     )
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_by_user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True))
+    created_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
 
     # Relationships
-    role_permissions: Mapped[list["RolePermission"]] = relationship(
+    role_permissions: Mapped[list[RolePermission]] = relationship(
         back_populates="role", cascade="all, delete-orphan"
     )
 
@@ -79,17 +80,19 @@ class RolePermission(Base):
 
     __tablename__ = "role_permissions"
 
-    role_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"),
+    role_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    permission_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"),
+    permission_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("permissions.id", ondelete="CASCADE"),
         primary_key=True,
     )
 
-    role: Mapped["Role"] = relationship(back_populates="role_permissions")
-    permission: Mapped["Permission"] = relationship()
+    role: Mapped[Role] = relationship(back_populates="role_permissions")
+    permission: Mapped[Permission] = relationship()
 
 
 class OrgUserRole(Base):
@@ -97,20 +100,22 @@ class OrgUserRole(Base):
 
     __tablename__ = "org_user_roles"
 
-    org_user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("org_users.id", ondelete="CASCADE"),
+    org_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("org_users.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    role_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"),
+    role_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    assigned_by: Mapped[str | None] = mapped_column(UUID(as_uuid=True))
+    assigned_by: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    role: Mapped["Role"] = relationship()
+    role: Mapped[Role] = relationship()
 
 
 class AdminUserRole(Base):
@@ -118,17 +123,19 @@ class AdminUserRole(Base):
 
     __tablename__ = "admin_user_roles"
 
-    admin_user_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("admin_users.id", ondelete="CASCADE"),
+    admin_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("admin_users.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    role_id: Mapped[str] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"),
+    role_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("roles.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    assigned_by: Mapped[str | None] = mapped_column(UUID(as_uuid=True))
+    assigned_by: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     assigned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    role: Mapped["Role"] = relationship()
+    role: Mapped[Role] = relationship()

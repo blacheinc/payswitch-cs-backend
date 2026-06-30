@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
+from uuid import UUID
 
 from app.config import get_settings
 
@@ -44,14 +46,14 @@ class InMemoryQueue:
         q = self._get_queue(topic_name)
         try:
             return await asyncio.wait_for(q.get(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     async def consume(
         self,
         topic_name: str,
         subscription_name: str | None,
-        handler: "MessageHandler",
+        handler: MessageHandler,
         *,
         timeout: float = 5.0,
     ) -> None:
@@ -67,9 +69,7 @@ class InMemoryQueue:
             try:
                 await handler(json.loads(raw))
             except Exception:
-                logger.exception(
-                    "[InMemoryQueue] handler error on '%s'", topic_name
-                )
+                logger.exception("[InMemoryQueue] handler error on '%s'", topic_name)
 
 
 class ServiceBusPublisher:
@@ -93,7 +93,7 @@ class ServiceBusPublisher:
 
         client = await self._get_client()
         async with client.get_topic_sender(topic_name) as sender:
-            app_props = {}
+            app_props: dict[str | bytes, int | float | bytes | bool | str | UUID] = {}
             for k, v in message.items():
                 if isinstance(v, (str, int, float, bool)):
                     app_props[k] = v
@@ -102,9 +102,7 @@ class ServiceBusPublisher:
                 else:
                     app_props[k] = str(v)
 
-            sb_message = ServiceBusMessage(
-                json.dumps(message), application_properties=app_props
-            )
+            sb_message = ServiceBusMessage(json.dumps(message), application_properties=app_props)
             await sender.send_messages(sb_message)
             logger.info(f"[ServiceBus] Message sent to topic '{topic_name}'")
 
@@ -144,7 +142,7 @@ class ServiceBusPublisher:
         self,
         topic_name: str,
         subscription_name: str | None,
-        handler: "MessageHandler",
+        handler: MessageHandler,
         *,
         timeout: float = 5.0,
     ) -> None:
@@ -171,7 +169,8 @@ class ServiceBusPublisher:
         ) as receiver:
             logger.info(
                 "[ServiceBus] consumer attached: %s/%s",
-                topic_name, subscription_name,
+                topic_name,
+                subscription_name,
             )
             while True:
                 try:
@@ -182,9 +181,9 @@ class ServiceBusPublisher:
                     raise
                 except Exception:
                     logger.exception(
-                        "[ServiceBus] receive_messages failed on %s/%s — "
-                        "will retry",
-                        topic_name, subscription_name,
+                        "[ServiceBus] receive_messages failed on %s/%s — will retry",
+                        topic_name,
+                        subscription_name,
                     )
                     await asyncio.sleep(2)
                     continue
@@ -198,13 +197,11 @@ class ServiceBusPublisher:
                     payload = json.loads(str(msg))
                 except json.JSONDecodeError:
                     logger.exception(
-                        "[ServiceBus] non-JSON message on %s/%s — "
-                        "dead-lettering",
-                        topic_name, subscription_name,
+                        "[ServiceBus] non-JSON message on %s/%s — dead-lettering",
+                        topic_name,
+                        subscription_name,
                     )
-                    await receiver.dead_letter_message(
-                        msg, reason="non_json_payload"
-                    )
+                    await receiver.dead_letter_message(msg, reason="non_json_payload")
                     continue
 
                 try:
@@ -212,7 +209,8 @@ class ServiceBusPublisher:
                 except Exception:
                     logger.exception(
                         "[ServiceBus] handler error on %s/%s — abandoning",
-                        topic_name, subscription_name,
+                        topic_name,
+                        subscription_name,
                     )
                     await receiver.abandon_message(msg)
                     continue
@@ -233,6 +231,7 @@ class EventPublisher:
     """Unified event publisher/subscriber that delegates to Service Bus or in-memory."""
 
     def __init__(self) -> None:
+        self._backend: ServiceBusPublisher | InMemoryQueue
         if settings.use_service_bus:
             print("Using Service Bus")
             self._backend = ServiceBusPublisher()
@@ -246,15 +245,11 @@ class EventPublisher:
         await self._backend.send(settings.azure_servicebus_queue_scoring, job_data)
 
     async def publish_webhook_delivery(self, delivery_data: dict[str, Any]) -> None:
-        await self._backend.send(
-            settings.azure_servicebus_queue_webhooks, delivery_data
-        )
+        await self._backend.send(settings.azure_servicebus_queue_webhooks, delivery_data)
 
     async def publish_batch_scoring_job(self, job_data: dict[str, Any]) -> None:
         """Publish a batch scoring job to the batch-score-request topic."""
-        await self._backend.send(
-            settings.azure_servicebus_topic_batch_score_request, job_data
-        )
+        await self._backend.send(settings.azure_servicebus_topic_batch_score_request, job_data)
 
     async def publish(self, topic_name: str, message: dict[str, Any]) -> None:
         """Publish a message to a topic."""
@@ -278,7 +273,8 @@ class EventPublisher:
         async def _subscriber_task():
             logger.info(
                 "[Subscriber] Listening on '%s/%s'",
-                topic_name, subscription_name,
+                topic_name,
+                subscription_name,
             )
             try:
                 await self._backend.consume(
@@ -290,14 +286,16 @@ class EventPublisher:
             except asyncio.CancelledError:
                 logger.info(
                     "[Subscriber] Stopped listening on '%s/%s'",
-                    topic_name, subscription_name,
+                    topic_name,
+                    subscription_name,
                 )
                 raise
             except Exception:
                 logger.exception(
                     "[Subscriber] consumer crashed on '%s/%s' — "
                     "task exiting; restart the app to recover",
-                    topic_name, subscription_name,
+                    topic_name,
+                    subscription_name,
                 )
 
         task = asyncio.create_task(_subscriber_task())

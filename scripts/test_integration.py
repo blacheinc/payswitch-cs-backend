@@ -11,7 +11,7 @@ import asyncio
 import os
 import sys
 import uuid
-from datetime import datetime, date
+from datetime import date
 
 import httpx
 
@@ -19,9 +19,9 @@ sys.path.append(os.getcwd())
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-BASE_URL = "http://localhost:8000"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 TIMEOUT = 30.0
 
 # ── ANSI helpers ─────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ async def test_health(ctx: Ctx):
     ctx.check(
         r.status_code == 200 and d["status"] in ("ok", "degraded"),
         "Readiness check",
-        f"pg={d.get('checks',{}).get('postgres')}",
+        f"pg={d.get('checks', {}).get('postgres')}",
     )
 
 
@@ -113,9 +113,7 @@ async def test_admin_auth(ctx: Ctx):
     ctx.section("Module 2: Authentication (Admin)")
 
     # Success
-    r = await ctx.c.post(
-        "/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS}
-    )
+    r = await ctx.c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASS})
     ok = r.status_code == 200 and "access_token" in r.json()
     if ok:
         ctx.admin_token = r.json()["access_token"]
@@ -123,25 +121,17 @@ async def test_admin_auth(ctx: Ctx):
     ctx.check(ok, "Admin login success", f"user_type={r.json().get('user_type')}")
 
     # Wrong password
-    r = await ctx.c.post(
-        "/auth/login", json={"email": ADMIN_EMAIL, "password": "WrongPass1"}
-    )
+    r = await ctx.c.post("/auth/login", json={"email": ADMIN_EMAIL, "password": "WrongPass1"})
     ctx.check(r.status_code == 401, "Admin login wrong password", f"→ {r.status_code}")
 
     # Non-existent email
-    r = await ctx.c.post(
-        "/auth/login", json={"email": "nobody@test.com", "password": "Whatever1"}
-    )
-    ctx.check(
-        r.status_code == 401, "Admin login non-existent email", f"→ {r.status_code}"
-    )
+    r = await ctx.c.post("/auth/login", json={"email": "nobody@test.com", "password": "Whatever1"})
+    ctx.check(r.status_code == 401, "Admin login non-existent email", f"→ {r.status_code}")
 
     # Refresh
     if ctx.admin_refresh:
         r = await ctx.c.post("/auth/refresh", json={"refresh_token": ctx.admin_refresh})
-        ctx.check(
-            r.status_code == 200 and "access_token" in r.json(), "Refresh token works"
-        )
+        ctx.check(r.status_code == 200 and "access_token" in r.json(), "Refresh token works")
 
     # Invalid refresh
     r = await ctx.c.post("/auth/refresh", json={"refresh_token": "invalid.token.here"})
@@ -238,9 +228,7 @@ async def test_org_crud(ctx: Ctx):
 
     # Provision again → conflict
     r = await ctx.c.post(f"/admin/organizations/{ctx.org_id}/provision", headers=h)
-    ctx.check(
-        r.status_code == 409, "Provision already-active → 409", f"→ {r.status_code}"
-    )
+    ctx.check(r.status_code == 409, "Provision already-active → 409", f"→ {r.status_code}")
 
     # Suspend
     r = await ctx.c.post(
@@ -282,9 +270,9 @@ async def test_org_auth(ctx: Ctx):
     user_email = f"orgtest_{uuid.uuid4().hex[:6]}@example.com"
     user_pass = "Test@12345"
 
-    from app.db import async_session_factory
-    from app.models.user import OrgUser, OrgRoleLabel, OrgUserStatus
     from app.core.security import hash_password
+    from app.db import async_session_factory
+    from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 
     async with async_session_factory() as session:
         u = OrgUser(
@@ -300,9 +288,7 @@ async def test_org_auth(ctx: Ctx):
         ctx.org_user_id = str(u.id)
 
     # Login
-    r = await ctx.c.post(
-        "/auth/login", json={"email": user_email, "password": user_pass}
-    )
+    r = await ctx.c.post("/auth/login", json={"email": user_email, "password": user_pass})
     ok = r.status_code == 200 and r.json().get("user_type") == "org_user"
     if ok:
         ctx.org_token = r.json()["access_token"]
@@ -319,9 +305,7 @@ async def test_org_auth(ctx: Ctx):
     ctx.check(r.status_code == 200, "Change password")
 
     # Login with new password
-    r = await ctx.c.post(
-        "/auth/login", json={"email": user_email, "password": new_pass}
-    )
+    r = await ctx.c.post("/auth/login", json={"email": user_email, "password": new_pass})
     ok2 = r.status_code == 200
     if ok2:
         ctx.org_token = r.json()["access_token"]
@@ -329,17 +313,13 @@ async def test_org_auth(ctx: Ctx):
     ctx.check(ok2, "Login with new password succeeds")
 
     # Old password fails
-    r = await ctx.c.post(
-        "/auth/login", json={"email": user_email, "password": user_pass}
-    )
+    r = await ctx.c.post("/auth/login", json={"email": user_email, "password": user_pass})
     ctx.check(r.status_code == 401, "Old password fails → 401")
 
     # Forgot password (always 200)
     r = await ctx.c.post("/auth/forgot-password", json={"email": user_email})
     ctx.check(r.status_code == 200, "Forgot password (valid email) → 200")
-    r = await ctx.c.post(
-        "/auth/forgot-password", json={"email": "ghost@nowhere.example.com"}
-    )
+    r = await ctx.c.post("/auth/forgot-password", json={"email": "ghost@nowhere.example.com"})
     ctx.check(
         r.status_code == 200,
         "Forgot password (fake email) → 200 (anti-enum)",
@@ -427,9 +407,7 @@ async def test_users(ctx: Ctx):
         json={"email": invite_email, "name": "Dup", "role_label": "viewer"},
         headers=h,
     )
-    ctx.check(
-        r.status_code == 409, "Invite duplicate email → 409", f"→ {r.status_code}"
-    )
+    ctx.check(r.status_code == 409, "Invite duplicate email → 409", f"→ {r.status_code}")
 
     # Remove invited user
     if ctx.invited_user_id:
@@ -558,8 +536,7 @@ async def test_webhooks(ctx: Ctx):
         updated = [w for w in r.json() if w["id"] == ctx.webhook_id]
         if updated:
             ctx.check(
-                updated[0]["url"] == "https://webhook.test/v2"
-                and updated[0]["is_active"] is False,
+                updated[0]["url"] == "https://webhook.test/v2" and updated[0]["is_active"] is False,
                 "Webhook update verified",
             )
         else:
@@ -628,9 +605,7 @@ async def test_scoring(ctx: Ctx):
             ctx.tracking_ids.append(tid2)
             ctx.check(True, "Create score (API key)", f"id={tid2}")
         else:
-            ctx.check(
-                False, "Create score (API key)", f"→ {r.status_code} {r.text[:200]}"
-            )
+            ctx.check(False, "Create score (API key)", f"→ {r.status_code} {r.text[:200]}")
             tid2 = None
     else:
         ctx.check(False, "Create score (API key) — SKIP, no key")
@@ -717,9 +692,7 @@ async def test_scoring(ctx: Ctx):
                 f"r1={r1.status_code} r2={r2.status_code}",
             )
         else:
-            ctx.check(
-                False, "Idempotency key", f"first request failed: {r1.status_code}"
-            )
+            ctx.check(False, "Idempotency key", f"first request failed: {r1.status_code}")
     except Exception as e:
         ctx.check(False, "Idempotency key", f"Exception: {e}")
 
@@ -816,9 +789,7 @@ async def test_data_sources(ctx: Ctx):
             r.status_code == 200 and r.json().get("short_code") == code,
             "Get data source",
         )
-        ctx.check(
-            r.json().get("has_active_template") is False, "No active template initially"
-        )
+        ctx.check(r.json().get("has_active_template") is False, "No active template initially")
 
     # List
     r = await ctx.c.get("/admin/sources", headers=h)
@@ -880,9 +851,7 @@ async def test_training_data(ctx: Ctx):
     files = {"file": ("test_data.csv", io.BytesIO(csv_content.encode()), "text/csv")}
     data = {"source_id": ctx.source_id}
 
-    r = await ctx.c.post(
-        "/admin/training-data/upload", files=files, data=data, headers=h
-    )
+    r = await ctx.c.post("/admin/training-data/upload", files=files, data=data, headers=h)
     if r.status_code in (200, 201):
         upload = r.json()
         upload_id = str(upload.get("id"))
@@ -893,15 +862,11 @@ async def test_training_data(ctx: Ctx):
 
     # Get upload
     r = await ctx.c.get(f"/admin/training-data/{upload_id}", headers=h)
-    ctx.check(
-        r.status_code == 200, "Get upload details", f"status={r.json().get('status')}"
-    )
+    ctx.check(r.status_code == 200, "Get upload details", f"status={r.json().get('status')}")
 
     # Status poll
     r = await ctx.c.get(f"/admin/training-data/{upload_id}/status", headers=h)
-    ctx.check(
-        r.status_code == 200, "Get upload status", f"status={r.json().get('status')}"
-    )
+    ctx.check(r.status_code == 200, "Get upload status", f"status={r.json().get('status')}")
 
     # List uploads
     r = await ctx.c.get("/admin/training-data", headers=h)
@@ -921,9 +886,7 @@ async def test_training_data(ctx: Ctx):
     # Get mapping
     r = await ctx.c.get(f"/admin/training-data/{upload_id}/mapping", headers=h)
     if r.status_code == 200:
-        ctx.check(
-            True, "Get mapping", f"features_mapped={r.json().get('features_mapped')}"
-        )
+        ctx.check(True, "Get mapping", f"features_mapped={r.json().get('features_mapped')}")
     else:
         ctx.check(
             r.status_code in (200, 202, 404),
@@ -980,10 +943,7 @@ async def main():
         if ctx.failed == 0:
             print(f"  {G}Results: {ctx.passed}/{total} passed ✔{X}")
         else:
-            print(
-                f"  {R}Results: {ctx.passed}/{total} passed, "
-                f"{ctx.failed} failed ✘{X}"
-            )
+            print(f"  {R}Results: {ctx.passed}/{total} passed, {ctx.failed} failed ✘{X}")
             print(f"\n  {R}Failed tests:{X}")
             for e in ctx.errors:
                 print(f"    {NO} {e}")

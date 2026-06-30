@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 
@@ -42,28 +43,21 @@ async def handle_data_ingested(message: dict[str, Any]) -> None:
         logger.error("[data-ingested] Missing training_upload_id in message")
         return
     if not status_value:
-        logger.error(
-            f"[data-ingested] Missing 'status' in message for upload {upload_id}"
-        )
+        logger.error(f"[data-ingested] Missing 'status' in message for upload {upload_id}")
         return
 
     new_status = _STATUS_MAP.get(status_value)
     if not new_status:
-        logger.error(
-            f"[data-ingested] Unknown status '{status_value}' for upload {upload_id}"
-        )
+        logger.error(f"[data-ingested] Unknown status '{status_value}' for upload {upload_id}")
         return
 
     logger.info(
-        f"[data-ingested] Processing upload {upload_id}: "
-        f"{status_value} -> {new_status.value}"
+        f"[data-ingested] Processing upload {upload_id}: {status_value} -> {new_status.value}"
     )
 
     async with async_session_factory() as db:
         async with db.begin():
-            result = await db.execute(
-                select(TrainingUpload).where(TrainingUpload.id == upload_id)
-            )
+            result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
             upload = result.scalar_one_or_none()
             if not upload:
                 logger.error(f"[data-ingested] Upload {upload_id} not found")
@@ -85,7 +79,7 @@ async def handle_data_ingested(message: dict[str, Any]) -> None:
                 upload.error_message = message["error_report"]
 
             if "schema_template_id" in message and message["schema_template_id"]:
-                upload.mapping_template_id = str(message["schema_template_id"])
+                upload.mapping_template_id = UUID(str(message["schema_template_id"]))
 
             # Mark completion time on terminal statuses
             if new_status == UploadStatus.TRANSFORMED:

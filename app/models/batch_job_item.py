@@ -7,16 +7,16 @@ from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
-class BatchJobItemStatus(str, enum.Enum):
+class BatchJobItemStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
-    COMPLETED = "completed"   # bureau + scoring submitted (incl. hard-stop declines)
-    FAILED = "failed"         # bureau lookup failed or scoring pipeline error
+    COMPLETED = "completed"  # bureau + scoring submitted (incl. hard-stop declines)
+    FAILED = "failed"  # bureau lookup failed or scoring pipeline error
     CANCELLED = "cancelled"
 
 

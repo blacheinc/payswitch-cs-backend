@@ -1,10 +1,11 @@
 import asyncio
-import uuid
-import httpx
-import json
 import logging
-from azure.servicebus.management import ServiceBusAdministrationClient
+import uuid
+
+import httpx
 from azure.servicebus.aio import ServiceBusClient
+from azure.servicebus.management import ServiceBusAdministrationClient
+
 from app.config import get_settings
 
 # Configure logging
@@ -87,9 +88,7 @@ async def run_verify():
             async with sb_client.get_subscription_receiver(
                 topic_name, sub_name, max_wait_time=10
             ) as receiver:
-                messages = await receiver.receive_messages(
-                    max_message_count=10, max_wait_time=10
-                )
+                messages = await receiver.receive_messages(max_message_count=10, max_wait_time=10)
 
                 if not messages:
                     logger.error("❌ NO MESSAGES RECEIVED IN SERVICE BUS!")
@@ -99,17 +98,13 @@ async def run_verify():
                         body = str(msg)
                         logger.info(f"Found message: {body}")
                         if upload_id in body:
-                            logger.info(
-                                "✅ SUCCESS: Found today's message in Service Bus!"
-                            )
+                            logger.info("✅ SUCCESS: Found today's message in Service Bus!")
                             logger.info(f"Enqueued Time: {msg.enqueued_time_utc}")
                             found = True
                         await receiver.complete_message(msg)
 
                     if not found:
-                        logger.warning(
-                            "Message received but didn't match our Upload ID!"
-                        )
+                        logger.warning("Message received but didn't match our Upload ID!")
 
     except Exception as e:
         logger.error(f"Verification script error: {e}", exc_info=True)
@@ -118,7 +113,7 @@ async def run_verify():
         logger.info(f"Deleting temporary subscription: {sub_name}")
         try:
             admin_client.delete_subscription(topic_name, sub_name)
-        except:
+        except Exception:
             pass
         admin_client.close()
 

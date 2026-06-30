@@ -7,17 +7,19 @@ throwaway invitee (invite → list → get → update role → suspend → activ
 Usage:
     .venv/bin/python scripts/test_admin_admins_flow.py
 """
+
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import uuid
 
 import httpx
 
-BASE = "http://localhost:8000"
-SUPER_ADMIN_EMAIL = "engineering@opensaucery.africa"
-SUPER_ADMIN_PASS = "opensaucery"
+BASE = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+SUPER_ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+SUPER_ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 
 def _ok(cond: bool, msg: str) -> None:
@@ -93,9 +95,7 @@ async def main() -> None:
         _ok(r.json()["email"] == invite_email, "get returns correct email")
 
         print("\n═══ Step 5: PATCH name + role to MODEL_OPS_ENGINEER ═══")
-        model_ops_role_id = await _fetch_platform_role_id(
-            c, headers, "MODEL_OPS_ENGINEER"
-        )
+        model_ops_role_id = await _fetch_platform_role_id(c, headers, "MODEL_OPS_ENGINEER")
         r = await c.patch(
             f"/admin/admins/{invitee_id}",
             headers=headers,

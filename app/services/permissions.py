@@ -23,15 +23,7 @@ async def load_user_permissions(db: AsyncSession, auth) -> set[str]:
     """
     # Already loaded this request — avoid a second DB round-trip.
     if getattr(auth, "permissions", None) is not None:
-        return auth.permissions
-
-    from app.models.permission import (
-        AdminUserRole,
-        OrgUserRole,
-        Permission,
-        Role,
-        RolePermission,
-    )
+        return set(auth.permissions)
 
     user_type = auth.user_type
 
@@ -51,15 +43,19 @@ async def load_user_permissions(db: AsyncSession, auth) -> set[str]:
 
 
 async def _admin_permissions(db: AsyncSession, user_id) -> set[str]:
-    from app.models.permission import AdminUserRole, Permission, Role, RolePermission
+    from app.models.permission import AdminUserRole, Role
 
     rows = (
-        await db.execute(
-            select(Role)
-            .join(AdminUserRole, AdminUserRole.role_id == Role.id)
-            .where(AdminUserRole.admin_user_id == user_id)
+        (
+            await db.execute(
+                select(Role)
+                .join(AdminUserRole, AdminUserRole.role_id == Role.id)
+                .where(AdminUserRole.admin_user_id == user_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not rows:
         return set()
@@ -72,15 +68,19 @@ async def _admin_permissions(db: AsyncSession, user_id) -> set[str]:
 
 
 async def _org_user_permissions(db: AsyncSession, user_id) -> set[str]:
-    from app.models.permission import OrgUserRole, Permission, Role, RolePermission
+    from app.models.permission import OrgUserRole, Role
 
     rows = (
-        await db.execute(
-            select(Role)
-            .join(OrgUserRole, OrgUserRole.role_id == Role.id)
-            .where(OrgUserRole.org_user_id == user_id)
+        (
+            await db.execute(
+                select(Role)
+                .join(OrgUserRole, OrgUserRole.role_id == Role.id)
+                .where(OrgUserRole.org_user_id == user_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     if not rows:
         return set()
@@ -100,11 +100,9 @@ async def _api_key_permissions(db: AsyncSession, api_key) -> set[str]:
         # No role assigned — fall back to full org access (backwards-compat)
         return set(ALL_ORG_PERMISSION_CODES)
 
-    from app.models.permission import Permission, Role, RolePermission
+    from app.models.permission import Role
 
-    role = (
-        await db.execute(select(Role).where(Role.id == role_id))
-    ).scalar_one_or_none()
+    role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
 
     if role is None:
         return set()
@@ -124,11 +122,15 @@ async def _permissions_for_roles(db: AsyncSession, role_ids: list) -> set[str]:
         return set()
 
     codes = (
-        await db.execute(
-            select(Permission.code)
-            .join(RolePermission, RolePermission.permission_id == Permission.id)
-            .where(RolePermission.role_id.in_(role_ids))
+        (
+            await db.execute(
+                select(Permission.code)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .where(RolePermission.role_id.in_(role_ids))
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return set(codes)

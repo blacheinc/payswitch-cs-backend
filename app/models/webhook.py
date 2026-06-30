@@ -23,19 +23,15 @@ class WebhookConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
     )
     url: Mapped[str] = mapped_column(String(500), nullable=False)
-    events: Mapped[list[str]] = mapped_column(
-        JSONB, default=["score.completed"], nullable=False
-    )
+    events: Mapped[list[str]] = mapped_column(JSONB, default=["score.completed"], nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     description: Mapped[str | None] = mapped_column(String(200))
 
     # Relationships
-    organization: Mapped["Organization"] = relationship(
-        back_populates="webhook_configs"
-    )
+    organization: Mapped[Organization] = relationship(back_populates="webhook_configs")
 
 
-class WebhookDeliveryStatus(str, enum.Enum):
+class WebhookDeliveryStatus(enum.StrEnum):
     PENDING = "pending"
     DELIVERED = "delivered"
     FAILED = "failed"
@@ -66,4 +62,4 @@ class WebhookDelivery(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    webhook_config: Mapped["WebhookConfig"] = relationship()
+    webhook_config: Mapped[WebhookConfig] = relationship()

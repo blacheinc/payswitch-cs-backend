@@ -21,9 +21,11 @@ namespace: payswitch-credit-scoring-prod
 
 namePrefix: ""        # set to e.g. "prod-" if you want unique resource names
 
-commonLabels:
-  app.kubernetes.io/instance: payswitch-prod
-  environment: prod
+labels:
+  - pairs:
+      app.kubernetes.io/instance: payswitch-prod
+      environment: prod
+    includeSelectors: true
 
 # Image override — pin to a specific tag here, or let GitLab CI rewrite
 # this file on every successful build.
@@ -46,17 +48,21 @@ patches:
       - op: replace
         path: /spec/tls/0/secretName
         value: payswitch-api-tls-prod
-
-# ── ConfigMap overrides ──────────────────────────────────────────────
-configMapGenerator:
-  - name: payswitch-config
-    behavior: merge
-    literals:
-      - APP_ENV=production
-      - DASHBOARD_BASE_URL=https://dashboard.your-domain.com
-      - EMAIL_FROM=noreply@your-domain.com
-      - ALLOWED_ORIGINS=https://dashboard.your-domain.com
-      - DE_INFERENCE_URL=https://your-de.azurewebsites.net/api/transform/inference
-      - ORCHESTRATOR_BASE_URL=https://your-orchestrator.azurewebsites.net
-      - AZURE_KEYVAULT_URL=https://your-kv.vault.azure.net/
-      - BOOTSTRAP_ADMIN_EMAIL=admin@your-domain.com
+  # ── ConfigMap overrides ────────────────────────────────────────────
+  - target:
+      kind: ConfigMap
+      name: payswitch-config
+    patch: |-
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: payswitch-config
+      data:
+        APP_ENV: production
+        DASHBOARD_BASE_URL: https://dashboard.your-domain.com
+        EMAIL_FROM: noreply@your-domain.com
+        ALLOWED_ORIGINS: https://dashboard.your-domain.com
+        DE_INFERENCE_URL: https://your-de.azurewebsites.net/api/transform/inference
+        ORCHESTRATOR_BASE_URL: https://your-orchestrator.azurewebsites.net
+        AZURE_KEYVAULT_URL: https://your-kv.vault.azure.net/
+        BOOTSTRAP_ADMIN_EMAIL: admin@your-domain.com

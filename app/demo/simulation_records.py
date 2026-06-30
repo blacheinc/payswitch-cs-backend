@@ -15,15 +15,15 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _FIXTURES_PATH = Path(__file__).with_name("xds_fixtures.json")
 
 
 @lru_cache(maxsize=1)
-def _xds_fixtures() -> dict[str, dict]:
+def _xds_fixtures() -> dict[str, dict[str, Any]]:
     """Raw XDS reports keyed by identification number."""
-    return json.loads(_FIXTURES_PATH.read_text())
+    return cast(dict[str, dict[str, Any]], json.loads(_FIXTURES_PATH.read_text()))
 
 
 # ── The five deterministic outcomes ─────────────────────────────────────────
@@ -47,7 +47,7 @@ SIMULATION_RECORDS: list[dict[str, Any]] = [
             "pd_confidence": 0.95,
             "fraud_risk_flag": "LOW",
             "fraud_anomaly_score": 0.05,
-            "recommended_amount_ghs": None,        # full requested amount approved
+            "recommended_amount_ghs": None,  # full requested amount approved
             "recommended_loan_tier": "LARGE",
             "income_tier": 3,
             "income_tier_label": "UPPER",
@@ -77,7 +77,7 @@ SIMULATION_RECORDS: list[dict[str, Any]] = [
             "pd_confidence": 0.84,
             "fraud_risk_flag": "LOW",
             "fraud_anomaly_score": 0.09,
-            "recommended_amount_ghs": None,        # FE shows reduced amount via tier
+            "recommended_amount_ghs": None,  # FE shows reduced amount via tier
             "recommended_loan_tier": "MEDIUM",
             "income_tier": 2,
             "income_tier_label": "UPPER_MID",
@@ -202,9 +202,7 @@ def _norm(v: str | None) -> str | None:
     return v.strip() if isinstance(v, str) and v.strip() else None
 
 
-def get_simulation_report(
-    identification: str | None, phone: str | None = None
-) -> dict | None:
+def get_simulation_report(identification: str | None, phone: str | None = None) -> dict | None:
     """Return the raw XDS report for a known demo ID/phone, else None."""
     rec = _BY_ID.get(_norm(identification) or "") or _BY_PHONE.get(_norm(phone) or "")
     if not rec:

@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import utcnow
@@ -35,7 +36,7 @@ async def compute_score_psi(db: AsyncSession) -> float | None:
     Writes a ModelMetric row with metric_type="score_psi".
     Returns PSI value or None if insufficient data.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    cutoff = datetime.now(UTC) - timedelta(days=30)
 
     result = await db.execute(
         select(DecisionMetric.credit_score).where(
@@ -52,12 +53,14 @@ async def compute_score_psi(db: AsyncSession) -> float | None:
     current_dist = _score_distribution(scores)
     psi = _psi(_BASELINE_SCORE_DIST, current_dist)
 
-    db.add(ModelMetric(
-        model_type="credit_risk",
-        metric_type="score_psi",
-        metrics={"psi": round(psi, 4), "sample_size": len(scores)},
-        timestamp=utcnow(),
-    ))
+    db.add(
+        ModelMetric(
+            model_type="credit_risk",
+            metric_type="score_psi",
+            metrics={"psi": round(psi, 4), "sample_size": len(scores)},
+            timestamp=utcnow(),
+        )
+    )
     logger.info("[drift] Score PSI=%.4f (n=%d)", psi, len(scores))
     return psi
 
@@ -69,12 +72,12 @@ async def compute_feature_drift(db: AsyncSession) -> dict[str, float]:
     against days 8-37 (baseline window). Writes a ModelMetric row
     with metric_type="drift". Returns {feature_name: psi_value}.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     current_start = now - timedelta(days=7)
     baseline_start = now - timedelta(days=37)
     baseline_end = current_start
 
-    def _extract_shap(rows: list) -> dict[str, list[float]]:
+    def _extract_shap(rows: Sequence[Any]) -> dict[str, list[float]]:
         """Extract {feature: [shap_values]} from ScoringResult rows."""
         by_feature: dict[str, list[float]] = {}
         for (credit_risk,) in rows:
@@ -91,20 +94,24 @@ async def compute_feature_drift(db: AsyncSession) -> dict[str, float]:
                     by_feature.setdefault(feat, []).append(float(val))
         return by_feature
 
-    current_rows = (await db.execute(
-        select(ScoringResult.credit_risk).where(
-            ScoringResult.scoring_timestamp >= current_start,
-            ScoringResult.credit_risk.is_not(None),
+    current_rows = (
+        await db.execute(
+            select(ScoringResult.credit_risk).where(
+                ScoringResult.scoring_timestamp >= current_start,
+                ScoringResult.credit_risk.is_not(None),
+            )
         )
-    )).all()
+    ).all()
 
-    baseline_rows = (await db.execute(
-        select(ScoringResult.credit_risk).where(
-            ScoringResult.scoring_timestamp >= baseline_start,
-            ScoringResult.scoring_timestamp < baseline_end,
-            ScoringResult.credit_risk.is_not(None),
+    baseline_rows = (
+        await db.execute(
+            select(ScoringResult.credit_risk).where(
+                ScoringResult.scoring_timestamp >= baseline_start,
+                ScoringResult.scoring_timestamp < baseline_end,
+                ScoringResult.credit_risk.is_not(None),
+            )
         )
-    )).all()
+    ).all()
 
     current_by_feature = _extract_shap(current_rows)
     baseline_by_feature = _extract_shap(baseline_rows)
@@ -118,12 +125,14 @@ async def compute_feature_drift(db: AsyncSession) -> dict[str, float]:
         base_dist = _shap_distribution(baseline_vals)
         feature_psi[feature] = round(_psi(base_dist, cur_dist), 4)
 
-    db.add(ModelMetric(
-        model_type="credit_risk",
-        metric_type="drift",
-        feature_drift=feature_psi,
-        timestamp=utcnow(),
-    ))
+    db.add(
+        ModelMetric(
+            model_type="credit_risk",
+            metric_type="drift",
+            feature_drift=feature_psi,
+            timestamp=utcnow(),
+        )
+    )
 
     if feature_psi:
         worst = max(feature_psi, key=lambda k: feature_psi[k])
@@ -135,6 +144,7 @@ async def compute_feature_drift(db: AsyncSession) -> dict[str, float]:
 
 
 # ── Pure utility functions ────────────────────────────────────────────────────
+
 
 def _score_distribution(scores: list[int]) -> list[float]:
     n = len(scores)
@@ -149,7 +159,9 @@ def _shap_distribution(values: list[float]) -> list[float]:
 def _psi(expected: list[float], actual: list[float]) -> float:
     """Population Stability Index. <0.10 stable, 0.10-0.20 moderate, ≥0.20 drift."""
     eps = 1e-6
-    return abs(sum(
-        (max(a, eps) - max(e, eps)) * math.log(max(a, eps) / max(e, eps))
-        for e, a in zip(expected, actual)
-    ))
+    return abs(
+        sum(
+            (max(a, eps) - max(e, eps)) * math.log(max(a, eps) / max(e, eps))
+            for e, a in zip(expected, actual)
+        )
+    )

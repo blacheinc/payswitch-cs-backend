@@ -14,6 +14,7 @@ Usage:
     BOOTSTRAP_ADMIN_PASSWORD='temporary-rotate-me' \\
     python scripts/create_superuser.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,20 +61,19 @@ async def create_superuser() -> int:
             print(f"[bootstrap] Superuser '{email}' already exists — nothing to do.")
             return 0
 
-        session.add(AdminUser(
-            email=email,
-            name=name,
-            password_hash=hash_password(password),
-            role=AdminRole.SUPER_ADMIN,
-            status=AdminUserStatus.ACTIVE,
-            totp_enabled=False,
-        ))
+        session.add(
+            AdminUser(
+                email=email,
+                name=name,
+                password_hash=hash_password(password),
+                role=AdminRole.SUPER_ADMIN,
+                status=AdminUserStatus.ACTIVE,
+                totp_enabled=False,
+            )
+        )
         await session.commit()
 
-    print(
-        f"[bootstrap] Created SUPER_ADMIN '{email}'. "
-        "Log in and rotate the password immediately."
-    )
+    print(f"[bootstrap] Created SUPER_ADMIN '{email}'. Log in and rotate the password immediately.")
     return 0
 
 

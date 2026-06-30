@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from datetime import date
-from pydantic import BaseModel, Field
 
+from pydantic import BaseModel, Field
 
 # ── Request ───────────────────────────────────────────────────────────────────
 
@@ -13,16 +13,20 @@ class BatchItemPayload(BaseModel):
     """Personal details for one applicant — mirrors BureauLookupRequest."""
 
     full_name: str | None = Field(
-        default=None, min_length=2, max_length=200,
+        default=None,
+        min_length=2,
+        max_length=200,
         description="Applicant full name. Optional if identification is provided.",
     )
     date_of_birth: date = Field(description="Applicant date of birth")
     identification: str | None = Field(
-        default=None, max_length=50,
+        default=None,
+        max_length=50,
         description="National ID / Ghana Card number",
     )
     phone_number: str | None = Field(
-        default=None, pattern=r"^\+?[0-9]{10,15}$",
+        default=None,
+        pattern=r"^\+?[0-9]{10,15}$",
         description="Mobile number for Product 49 lookup",
     )
     account_number: str | None = Field(default=None, max_length=50)
@@ -34,7 +38,9 @@ class BatchItemPayload(BaseModel):
 
 class BatchScoreRequest(BaseModel):
     items: list[BatchItemPayload] = Field(
-        ..., min_length=1, max_length=100,
+        ...,
+        min_length=1,
+        max_length=100,
         description="Array of applicants to score. Maximum 100 per batch.",
     )
 
@@ -59,7 +65,7 @@ class BatchItemCounts(BaseModel):
 
 class BatchJobStatusResponse(BaseModel):
     job_id: str
-    status: str          # queued | processing | completed | failed | cancelled
+    status: str  # queued | processing | completed | failed | cancelled
     total: int
     progress_pct: int
     items: BatchItemCounts
@@ -70,8 +76,9 @@ class BatchJobStatusResponse(BaseModel):
 
 class BatchItemResult(BaseModel):
     """One row in the results table."""
+
     index: int
-    status: str          # completed | failed | pending | processing | cancelled
+    status: str  # completed | failed | pending | processing | cancelled
     score_request_id: str | None = None
     score_tracking_id: str | None = None
     # "bureau_failed" | "scoring_error" — only on failed items

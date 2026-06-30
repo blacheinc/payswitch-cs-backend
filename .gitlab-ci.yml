@@ -1,0 +1,115 @@
+stages:
+  - quality
+  - test
+  - security
+  - package
+  - container-security
+  - deploy-validate
+
+default:
+  image: python:3.11-slim
+  cache:
+    key: "python-${CI_COMMIT_REF_SLUG}"
+    paths:
+      - .cache/pip
+  before_script:
+    - python -m venv .venv
+    - .venv/bin/pip install --cache-dir .cache/pip -e '.[dev]'
+
+ruff-and-mypy:
+  stage: quality
+  script:
+    - .venv/bin/python -m ruff check app tests scripts
+    - .venv/bin/python -m ruff format --check app tests scripts
+    - .venv/bin/python -m mypy app tests
+
+unit-and-coverage:
+  stage: test
+  script:
+    - .venv/bin/python -m pytest --cov=app --cov-report=term --cov-report=xml:coverage.xml
+    - >-
+      .venv/bin/python -m pytest
+      --cov=app.core.security
+      --cov=app.dependencies
+      --cov=app.services.hard_stops
+      --cov=app.services.scoring_pipeline
+      --cov=app.subscribers.batch_complete
+      --cov-fail-under=80
+      --cov-report=term
+  coverage: '/TOTAL\s+\d+\s+\d+\s+(\d+(?:\.\d+)?)%/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+
+dependency-and-sast:
+  stage: security
+  script:
+    - .venv/bin/python -m pip_audit
+    - .venv/bin/python -m bandit -r app -q
+
+container-build:
+  stage: package
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script: []
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker build --pull --tag "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}" .
+    - docker inspect --format '{{.Config.User}}' "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}" | grep -Eq '^(app|999)$'
+    - docker push "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+
+container-vulnerability-scan:
+  stage: container-security
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  before_script: []
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+    TRIVY_AUTH_URL: "$CI_REGISTRY"
+  script:
+    - >-
+      trivy image
+      --exit-code 1
+      --ignore-unfixed
+      --severity HIGH,CRITICAL
+      "${CI_REGISTRY_IMAGE}:${CI_COMMIT_SHA}"
+
+kubernetes-and-argo-validate:
+  stage: deploy-validate
+  image: alpine/k8s:1.31.6
+  before_script: []
+  script:
+    - kubectl kustomize infra/k8s/base >/tmp/base.yaml
+    - kubectl kustomize infra/k8s/overlays/example >/tmp/overlay.yaml
+    - test -s /tmp/base.yaml
+    - test -s /tmp/overlay.yaml
+    - grep -q 'argocd.argoproj.io/hook: PreSync' /tmp/overlay.yaml
+    - grep -q 'runAsNonRoot: true' /tmp/overlay.yaml
+
+isolated-e2e:
+  stage: deploy-validate
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache python3 py3-pip curl
+    - python3 -m venv .venv
+    - .venv/bin/pip install -e '.[dev]'
+  script:
+    - ./scripts/run_handover_e2e.sh

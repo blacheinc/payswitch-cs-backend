@@ -7,7 +7,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -21,14 +20,14 @@ if TYPE_CHECKING:
     from app.models.user import OrgUser
 
 
-class ScoreRequestStatus(str, enum.Enum):
+class ScoreRequestStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
 
 
-class RequestSource(str, enum.Enum):
+class RequestSource(enum.StrEnum):
     API = "api"
     WEB_PORTAL = "web_portal"
     BULK = "bulk"
@@ -37,9 +36,7 @@ class RequestSource(str, enum.Enum):
 class ScoreRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "score_requests"
 
-    tracking_id: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    tracking_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     organization_id: Mapped[str] = mapped_column(
         UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
     )
@@ -73,16 +70,12 @@ class ScoreRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     model_version: Mapped[str | None] = mapped_column(String(50))
     processing_time_ms: Mapped[int | None] = mapped_column(Integer)
     # Who made the request
-    api_key_id: Mapped[str | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("api_keys.id")
-    )
+    api_key_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), ForeignKey("api_keys.id"))
     created_by_user_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("org_users.id")
     )
     # Idempotency
-    idempotency_key: Mapped[str | None] = mapped_column(
-        String(100), unique=True, index=True
-    )
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
     # Timestamps
     scored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -90,25 +83,22 @@ class ScoreRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     callback_url: Mapped[str | None] = mapped_column(String(500))
 
     # Relationships
-    organization: Mapped["Organization"] = relationship(back_populates="score_requests")
-    api_key: Mapped["ApiKey | None"] = relationship()
-    created_by: Mapped["OrgUser | None"] = relationship()
-    decision: Mapped["ScoreDecision | None"] = relationship(
+    organization: Mapped[Organization] = relationship(back_populates="score_requests")
+    api_key: Mapped[ApiKey | None] = relationship()
+    created_by: Mapped[OrgUser | None] = relationship()
+    decision: Mapped[ScoreDecision | None] = relationship(
         back_populates="score_request", uselist=False
     )
-    scoring_result: Mapped["ScoringResult | None"] = relationship(
-        back_populates="score_request", uselist=False,
-        foreign_keys="ScoringResult.score_request_id"
+    scoring_result: Mapped[ScoringResult | None] = relationship(
+        back_populates="score_request", uselist=False, foreign_keys="ScoringResult.score_request_id"
     )
-    loan_performances: Mapped[list["LoanPerformance"]] = relationship(
-        back_populates="score_request"
-    )
+    loan_performances: Mapped[list[LoanPerformance]] = relationship(back_populates="score_request")
 
     def __repr__(self) -> str:
         return f"<ScoreRequest {self.tracking_id} ({self.status.value})>"
 
 
-class DecisionType(str, enum.Enum):
+class DecisionType(enum.StrEnum):
     APPROVE = "APPROVE"
     CONDITIONAL_APPROVE = "CONDITIONAL_APPROVE"
     REFER = "REFER"
@@ -144,16 +134,14 @@ class ScoreDecision(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     decided_by_user_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("org_users.id")
     )
-    decided_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Relationships
-    score_request: Mapped["ScoreRequest"] = relationship(back_populates="decision")
-    decided_by: Mapped["OrgUser | None"] = relationship()
+    score_request: Mapped[ScoreRequest] = relationship(back_populates="decision")
+    decided_by: Mapped[OrgUser | None] = relationship()
 
 
-class LoanPerformanceStatus(str, enum.Enum):
+class LoanPerformanceStatus(enum.StrEnum):
     CURRENT = "current"
     PAST_DUE_30 = "past_due_30"
     PAST_DUE_60 = "past_due_60"
@@ -180,11 +168,7 @@ class LoanPerformance(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     days_past_due: Mapped[int | None] = mapped_column(Integer)
     outstanding_balance: Mapped[Decimal | None] = mapped_column(Numeric(15, 2))
     as_of_date: Mapped[datetime] = mapped_column(Date, nullable=False)
-    reported_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     # Relationships
-    score_request: Mapped["ScoreRequest"] = relationship(
-        back_populates="loan_performances"
-    )
+    score_request: Mapped[ScoreRequest] = relationship(back_populates="loan_performances")

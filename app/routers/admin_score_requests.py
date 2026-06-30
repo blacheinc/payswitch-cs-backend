@@ -21,6 +21,7 @@ requests live on the existing org-side router; admins reach them via
 the ``admin.score_requests.read`` permission added to the cross-org
 flow there.
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -39,9 +40,7 @@ router = APIRouter(prefix="/admin/score-requests", tags=["Platform Admin – Sco
 
 @router.get("/stats", response_model=ScoreRequestStatsResponse)
 async def get_platform_score_request_stats(
-    auth: Annotated[
-        AuthContext, Depends(require_permission("admin.score_requests.read"))
-    ],
+    auth: Annotated[AuthContext, Depends(require_permission("admin.score_requests.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     period: str = Query(
         "7d",
@@ -73,12 +72,11 @@ async def get_platform_score_request_stats(
     budgets and gives the FE full control over sort/filter/pagination.
     """
     org_filter = await resolve_org_filter(
-        db, auth,
+        db,
+        auth,
         requested_org_id=organization_id,
         admin_permission="admin.score_requests.read",
         resource_type="score_requests",
     )
 
-    return await _compute_score_request_stats(
-        db, org_filter.organization_id, period
-    )
+    return await _compute_score_request_stats(db, org_filter.organization_id, period)

@@ -134,7 +134,17 @@ test: ## Run the full test suite
 
 .PHONY: test-cov
 test-cov: ## Run tests with coverage report
-	$(PYTEST) tests/ -v --cov=app --cov-report=term-missing
+	$(PYTEST) tests/ -v --cov=app --cov-report=term-missing --cov-fail-under=60
+
+.PHONY: test-critical-cov
+test-critical-cov: ## Require 80% coverage across critical security/scoring paths
+	$(PYTEST) tests/ -v \
+		--cov=app.core.security \
+		--cov=app.dependencies \
+		--cov=app.services.hard_stops \
+		--cov=app.services.scoring_pipeline \
+		--cov=app.subscribers.batch_complete \
+		--cov-fail-under=80 --cov-report=term-missing
 
 .PHONY: test-integration
 test-integration: ## Run integration tests only
@@ -162,6 +172,20 @@ format: ## Format code with ruff
 
 .PHONY: check
 check: lint ## Run all code quality checks
+	$(RUFF) format --check app/ tests/ scripts/
+	$(PYTHON) -m mypy app tests
+
+.PHONY: verify-handover
+verify-handover: ## Run quality, coverage, security, and manifest handover gates
+	./scripts/verify_handover.sh
+
+.PHONY: test-e2e
+test-e2e: ## Run isolated Docker integration stack and 3-item batch E2E
+	./scripts/run_handover_e2e.sh
+
+.PHONY: test-e2e-local
+test-e2e-local: ## Run isolated E2E with local Postgres and in-process Redis
+	./scripts/run_handover_e2e_local.sh
 
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Utilities

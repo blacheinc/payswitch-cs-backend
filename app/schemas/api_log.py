@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 class ActorInfo(BaseModel):
     """Resolved identity of whoever made the request."""
+
     id: str
     # "org_user" | "admin_user" | "api_key"
     type: str

@@ -28,14 +28,17 @@ def _normalize_async_url(url: str) -> str:
     from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
     if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://"):]
+        url = "postgresql://" + url[len("postgres://") :]
     if url.startswith("postgresql://"):  # no explicit driver → use asyncpg
-        url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+        url = "postgresql+asyncpg://" + url[len("postgresql://") :]
 
     parts = urlsplit(url)
     if parts.query:
-        kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
-                if k not in ("sslmode", "channel_binding")]
+        kept = [
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k not in ("sslmode", "channel_binding")
+        ]
         url = urlunsplit(parts._replace(query=urlencode(kept)))
     return url
 
