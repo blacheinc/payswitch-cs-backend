@@ -16,19 +16,21 @@ Plus the new admin-only platform endpoint:
 Usage:
     .venv/bin/python scripts/test_cross_org_admin_reads.py
 """
+
 from __future__ import annotations
 
+import os
 import sys
 import time
 from typing import Any
 
 import httpx
 
-BASE = "http://localhost:8000"
-ORG_USER_EMAIL = "test_org_user@mailinator.com"
-ORG_USER_PASS = "Testing123!"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ORG_USER_EMAIL = os.environ.get("TEST_ORG_EMAIL", "")
+ORG_USER_PASS = os.environ.get("TEST_ORG_PASSWORD", "")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 
 def _ok(cond: bool, msg: str) -> None:
@@ -58,9 +60,7 @@ def main() -> None:
         me = c.get("/auth/me", headers=_h(org_token)).json()
         own_org_id = me["organization_id"]
 
-        org_list = c.get(
-            "/admin/organizations?per_page=5", headers=_h(admin_token)
-        ).json()
+        org_list = c.get("/admin/organizations?per_page=5", headers=_h(admin_token)).json()
         items = org_list.get("items", []) if isinstance(org_list, dict) else org_list
         other_org_id = next(
             (o["id"] for o in items if o["id"] != own_org_id),
@@ -72,9 +72,7 @@ def main() -> None:
         print(f"  other org  = {other_org_id}")
 
         print("\n═══ Step 1: Org user — own org id is accepted ═══")
-        r = c.get(
-            f"/v1/score-requests?organization_id={own_org_id}", headers=_h(org_token)
-        )
+        r = c.get(f"/v1/score-requests?organization_id={own_org_id}", headers=_h(org_token))
         _ok(r.status_code == 200, f"org user → own org: 200 (got {r.status_code})")
 
         print("\n═══ Step 2: Org user — other org id is rejected (403) ═══")
@@ -142,6 +140,7 @@ def main() -> None:
         time.sleep(0.5)
         # Use a low-level DB peek — the API doesn't expose audit_logs directly
         import asyncio
+
         from sqlalchemy import func, select
 
         async def _count_recent_audits() -> int:

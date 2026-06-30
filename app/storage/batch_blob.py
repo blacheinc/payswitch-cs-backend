@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any, cast
 
 from app.storage.champion_blob import _get_connection_string
 
@@ -32,12 +33,11 @@ def read_batch_status(job_id: str) -> dict[str, Any] | None:
 
     try:
         with BlobServiceClient.from_connection_string(conn_str) as svc:
-            blob = (
-                svc.get_container_client(_CONTAINER)
-                   .get_blob_client(f"batch/{job_id}/status.json")
+            blob = svc.get_container_client(_CONTAINER).get_blob_client(
+                f"batch/{job_id}/status.json"
             )
             content = blob.download_blob().readall()
-            return json.loads(content.decode("utf-8"))
+            return cast(dict[str, Any], json.loads(content.decode("utf-8")))
     except Exception as e:
         name = type(e).__name__
         if "ResourceNotFound" in name or "BlobNotFound" in str(e):

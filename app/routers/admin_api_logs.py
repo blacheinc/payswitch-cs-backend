@@ -63,9 +63,7 @@ async def list_platform_api_logs(
     if status_class:
         base = int(status_class[0]) * 100
         query = query.where(ApiLog.status_code >= base, ApiLog.status_code < base + 100)
-        count_query = count_query.where(
-            ApiLog.status_code >= base, ApiLog.status_code < base + 100
-        )
+        count_query = count_query.where(ApiLog.status_code >= base, ApiLog.status_code < base + 100)
     if path:
         query = query.where(ApiLog.path.ilike(f"%{path}%"))
         count_query = count_query.where(ApiLog.path.ilike(f"%{path}%"))
@@ -88,9 +86,7 @@ async def list_platform_api_logs(
 
     return PaginatedResponse.create(
         items=[
-            ApiLogResponse.model_validate(log).model_copy(
-                update={"actor": pick_actor(log, actors)}
-            )
+            ApiLogResponse.model_validate(log).model_copy(update={"actor": pick_actor(log, actors)})
             for log in logs
         ],
         total=total,

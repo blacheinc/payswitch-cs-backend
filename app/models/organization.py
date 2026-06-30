@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from app.models.webhook import WebhookConfig
 
 
-class IndustryType(str, enum.Enum):
+class IndustryType(enum.StrEnum):
     BANK = "bank"
     FINTECH = "fintech"
     MFI = "mfi"
@@ -25,7 +25,7 @@ class IndustryType(str, enum.Enum):
     OTHER = "other"
 
 
-class OrgStatus(str, enum.Enum):
+class OrgStatus(enum.StrEnum):
     PENDING = "pending"
     ACTIVE = "active"
     SUSPENDED = "suspended"
@@ -35,9 +35,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "organizations"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    short_name: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    short_name: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     industry_type: Mapped[IndustryType] = mapped_column(
         Enum(
             IndustryType,
@@ -51,9 +49,7 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     primary_contact_phone: Mapped[str | None] = mapped_column(String(20))
     address: Mapped[str | None] = mapped_column(Text)
     status: Mapped[OrgStatus] = mapped_column(
-        Enum(
-            OrgStatus, name="org_status", values_callable=lambda x: [e.value for e in x]
-        ),
+        Enum(OrgStatus, name="org_status", values_callable=lambda x: [e.value for e in x]),
         default=OrgStatus.PENDING,
         nullable=False,
     )
@@ -61,16 +57,12 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     webhook_secret: Mapped[str | None] = mapped_column(String(64))
 
     # Relationships
-    users: Mapped[list["OrgUser"]] = relationship(
-        back_populates="organization", lazy="selectin"
-    )
-    api_keys: Mapped[list["ApiKey"]] = relationship(
-        back_populates="organization", lazy="selectin"
-    )
-    score_requests: Mapped[list["ScoreRequest"]] = relationship(
+    users: Mapped[list[OrgUser]] = relationship(back_populates="organization", lazy="selectin")
+    api_keys: Mapped[list[ApiKey]] = relationship(back_populates="organization", lazy="selectin")
+    score_requests: Mapped[list[ScoreRequest]] = relationship(
         back_populates="organization", lazy="noload"
     )
-    webhook_configs: Mapped[list["WebhookConfig"]] = relationship(
+    webhook_configs: Mapped[list[WebhookConfig]] = relationship(
         back_populates="organization", lazy="selectin"
     )
 

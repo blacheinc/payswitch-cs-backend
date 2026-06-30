@@ -4,16 +4,30 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models.user import AdminUser
 
+if TYPE_CHECKING:
+    from app.models.data_source import TrainingUpload
 
-class ModelStatus(str, enum.Enum):
+
+class ModelStatus(enum.StrEnum):
     TRAINING = "training"
     VALIDATION = "validation"
     STAGING = "staging"
@@ -74,13 +88,11 @@ class ModelVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     all_models_metrics: Mapped[dict | None] = mapped_column(JSONB)
 
     # Relationships
-    promoted_by: Mapped["AdminUser | None"] = relationship()
-    training_upload: Mapped["TrainingUpload | None"] = relationship(
-        foreign_keys=[training_upload_id]
-    )
+    promoted_by: Mapped[AdminUser | None] = relationship()
+    training_upload: Mapped[TrainingUpload | None] = relationship(foreign_keys=[training_upload_id])
 
 
-class TrainingDataStatus(str, enum.Enum):
+class TrainingDataStatus(enum.StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -89,7 +101,7 @@ class TrainingDataStatus(str, enum.Enum):
     FAILED = "failed"
 
 
-class SourceType(str, enum.Enum):
+class SourceType(enum.StrEnum):
     BANK = "bank"
     BUREAU = "bureau"
     TELCO = "telco"
@@ -131,4 +143,4 @@ class TrainingDataSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Relationships
-    uploaded_by: Mapped["AdminUser | None"] = relationship()
+    uploaded_by: Mapped[AdminUser | None] = relationship()

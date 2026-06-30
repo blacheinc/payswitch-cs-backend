@@ -2,16 +2,17 @@ import asyncio
 import os
 import sys
 import uuid
-import httpx
 from datetime import datetime
+
+import httpx
 
 # Add project root to path for imports
 sys.path.append(os.getcwd())
 
 # Configuration
-BASE_URL = "http://localhost:8000"
-ADMIN_EMAIL = "engineering@opensaucery.africa"
-ADMIN_PASS = "opensaucery"
+BASE_URL = os.environ.get("TEST_API_BASE_URL", "http://localhost:8000")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "")
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD", "")
 
 # ANSI Colors
 C_GREEN = "\033[92m"
@@ -82,9 +83,7 @@ async def test_admin_orgs(client: httpx.AsyncClient, token: str) -> str | None:
             print(f"{CHECK} Create Org '{org_name}' (ID: {org_id})")
 
             # Activate Org
-            resp = await client.post(
-                f"/admin/organizations/{org_id}/activate", headers=headers
-            )
+            resp = await client.post(f"/admin/organizations/{org_id}/activate", headers=headers)
             if resp.status_code == 200:
                 print(f"{CHECK} Activated Org")
             else:
@@ -127,9 +126,7 @@ async def test_admin_sources_and_upload(client: httpx.AsyncClient, token: str):
 
     # 3. Upload File
     if source_id:
-        file_content = (
-            b"customer_id,loan_amount,status\n1,5000,paid\n2,3000,defaulted\n"
-        )
+        file_content = b"customer_id,loan_amount,status\n1,5000,paid\n2,3000,defaulted\n"
         files = {"file": ("test_data.csv", file_content, "text/csv")}
         data = {"source_id": source_id}
 
@@ -143,9 +140,7 @@ async def test_admin_sources_and_upload(client: httpx.AsyncClient, token: str):
             print(f"{CHECK} Uploaded Training Data (Upload ID: {upload_id})")
 
             # 4. Check status
-            resp = await client.get(
-                f"/admin/training-data/{upload_id}", headers=headers
-            )
+            resp = await client.get(f"/admin/training-data/{upload_id}", headers=headers)
             if resp.status_code == 200:
                 print(f"{CHECK} Upload Status: {resp.json()['status']}")
             else:
@@ -158,11 +153,12 @@ async def seed_org_user(org_id: str, email: str, password: str):
     print(f"\n{C_BLUE}── Seeding Org User ────────────────────────────{C_RESET}")
 
     try:
-        from app.db import async_session_factory
-        from app.models.user import OrgUser, OrgRoleLabel, OrgUserStatus
-        from app.models.organization import Organization, OrgStatus
         from sqlalchemy import update
+
         from app.core.security import hash_password
+        from app.db import async_session_factory
+        from app.models.organization import Organization, OrgStatus
+        from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 
         async with async_session_factory() as session:
             # Activate the organization so API tests work
@@ -187,9 +183,7 @@ async def seed_org_user(org_id: str, email: str, password: str):
         print(f"{FAIL} Seeding Failed: {e}")
 
 
-async def test_org_login(
-    client: httpx.AsyncClient, email: str, password: str
-) -> str | None:
+async def test_org_login(client: httpx.AsyncClient, email: str, password: str) -> str | None:
     print(f"\n{C_BLUE}── Testing Org Auth ────────────────────────────{C_RESET}")
     try:
         payload = {"email": email, "password": password}
@@ -282,9 +276,7 @@ async def test_scoring(client: httpx.AsyncClient, token: str, api_key: str | Non
     if resp.status_code in [200, 201]:
         print(f"{CHECK} Create Score Request (Bearer)")
     else:
-        print(
-            f"{FAIL} Create Score Request (Bearer) Failed: {resp.status_code} {resp.text}"
-        )
+        print(f"{FAIL} Create Score Request (Bearer) Failed: {resp.status_code} {resp.text}")
 
     # Try with API Key if available
     if api_key:
@@ -293,15 +285,11 @@ async def test_scoring(client: httpx.AsyncClient, token: str, api_key: str | Non
         # modify payload slightly to avoid duplicate check?
         payload["applicant"]["national_id_number"] = f"GHA-{uuid.uuid4().hex[:9]}-0"
 
-        resp = await client.post(
-            "/v1/score-requests", json=payload, headers=headers_key
-        )
+        resp = await client.post("/v1/score-requests", json=payload, headers=headers_key)
         if resp.status_code in [200, 201]:
             print(f"{CHECK} Create Score Request (API Key)")
         else:
-            print(
-                f"{FAIL} Create Score Request (API Key) Failed: {resp.status_code} {resp.text}"
-            )
+            print(f"{FAIL} Create Score Request (API Key) Failed: {resp.status_code} {resp.text}")
 
 
 def datetim_to_date_str(dt):

@@ -46,14 +46,10 @@ async def handle_model_training_started(message: dict[str, Any]) -> None:
 
     async with async_session_factory() as db:
         async with db.begin():
-            result = await db.execute(
-                select(TrainingUpload).where(TrainingUpload.id == upload_id)
-            )
+            result = await db.execute(select(TrainingUpload).where(TrainingUpload.id == upload_id))
             upload = result.scalar_one_or_none()
             if not upload:
-                logger.warning(
-                    f"[model-training-started] TrainingUpload {upload_id} not found"
-                )
+                logger.warning(f"[model-training-started] TrainingUpload {upload_id} not found")
                 return
 
             upload.status = UploadStatus.TRAINING

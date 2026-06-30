@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Annotated
 
+from fastapi import APIRouter, Depends
 from jose import jwt
-
-from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import AuthenticationError, NotFoundError
+from app.core.exceptions import AuthenticationError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -26,7 +26,12 @@ from app.core.security import (
 )
 from app.db import get_db
 from app.db.base import utcnow
-from app.dependencies import AuthContext, get_auth_context, get_current_admin, get_current_org_user, get_current_user
+from app.dependencies import (
+    AuthContext,
+    get_auth_context,
+    get_current_org_user,
+    get_current_user,
+)
 from app.models.user import AdminUser, AdminUserStatus, OrgUser, OrgUserStatus
 from app.schemas.auth import (
     ChangePasswordRequest,
@@ -34,8 +39,8 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     RefreshTokenRequest,
-    ResetPasswordRequest,
     Remove2FARequest,
+    ResetPasswordRequest,
     Setup2FAResponse,
     TokenResponse,
     UserPermissionsResponse,
@@ -46,6 +51,8 @@ from app.schemas.auth import (
 )
 from app.schemas.common import SuccessResponse
 from app.services.email import email_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 settings = get_settings()
@@ -75,15 +82,9 @@ async def get_me(
             status=current_user.status.value,
             totp_enabled=current_user.totp_enabled,
             last_login_at=(
-                current_user.last_login_at.isoformat()
-                if current_user.last_login_at
-                else None
+                current_user.last_login_at.isoformat() if current_user.last_login_at else None
             ),
-            created_at=(
-                current_user.created_at.isoformat()
-                if current_user.created_at
-                else None
-            ),
+            created_at=(current_user.created_at.isoformat() if current_user.created_at else None),
             permissions=perms,
         )
 
@@ -104,15 +105,9 @@ async def get_me(
         totp_enabled=current_user.totp_enabled,
         organization_id=str(current_user.organization_id),
         last_login_at=(
-            current_user.last_login_at.isoformat()
-            if current_user.last_login_at
-            else None
+            current_user.last_login_at.isoformat() if current_user.last_login_at else None
         ),
-        created_at=(
-            current_user.created_at.isoformat()
-            if current_user.created_at
-            else None
-        ),
+        created_at=(current_user.created_at.isoformat() if current_user.created_at else None),
         permissions=perms,
     )
 
@@ -135,8 +130,8 @@ async def get_my_permissions(
 
     perms = await load_user_permissions(db, auth)
     is_super = "*" in perms
-    user_id = str(auth.user_id) if auth.user_id else (
-        str(auth.api_key.id) if auth.api_key else "unknown"
+    user_id = (
+        str(auth.user_id) if auth.user_id else (str(auth.api_key.id) if auth.api_key else "unknown")
     )
     return UserPermissionsResponse(
         user_id=user_id,
@@ -156,8 +151,8 @@ async def login(
     # phone keyboard auto-capitalizing the first letter) doesn't break login.
     email = (body.email or "").strip().lower()
     # Try admin first, then org user
-    result = await db.execute(select(AdminUser).where(AdminUser.email == email))
-    admin = result.scalar_one_or_none()
+    admin_result = await db.execute(select(AdminUser).where(AdminUser.email == email))
+    admin = admin_result.scalar_one_or_none()
 
     if admin and admin.status == AdminUserStatus.ACTIVE:
         if not verify_password(body.password, admin.password_hash):
@@ -172,9 +167,7 @@ async def login(
             "role": admin.role.value,
             "status": admin.status.value,
             "totp_enabled": admin.totp_enabled,
-            "last_login_at": (
-                admin.last_login_at.isoformat() if admin.last_login_at else None
-            ),
+            "last_login_at": (admin.last_login_at.isoformat() if admin.last_login_at else None),
             "created_at": admin.created_at.isoformat() if admin.created_at else None,
         }
 
@@ -186,7 +179,8 @@ async def login(
             )
             return LoginResponse(
                 access_token=temp_token,
-                refresh_token="",
+                # Refresh is intentionally unavailable until 2FA succeeds.
+                refresh_token="",  # nosec B106
                 expires_in=300,
                 requires_2fa=True,
                 user_type="admin",
@@ -207,8 +201,8 @@ async def login(
         )
 
     # Try org user
-    result = await db.execute(select(OrgUser).where(OrgUser.email == email))
-    org_user = result.scalar_one_or_none()
+    org_user_result = await db.execute(select(OrgUser).where(OrgUser.email == email))
+    org_user = org_user_result.scalar_one_or_none()
 
     if org_user and org_user.status == OrgUserStatus.ACTIVE:
         if not verify_password(body.password, org_user.password_hash):
@@ -227,9 +221,7 @@ async def login(
             "last_login_at": (
                 org_user.last_login_at.isoformat() if org_user.last_login_at else None
             ),
-            "created_at": (
-                org_user.created_at.isoformat() if org_user.created_at else None
-            ),
+            "created_at": (org_user.created_at.isoformat() if org_user.created_at else None),
         }
 
         if org_user.totp_enabled or org_user.totp_secret:
@@ -239,7 +231,8 @@ async def login(
             )
             return LoginResponse(
                 access_token=temp_token,
-                refresh_token="",
+                # Refresh is intentionally unavailable until 2FA succeeds.
+                refresh_token="",  # nosec B106
                 expires_in=300,
                 requires_2fa=True,
                 user_type="org_user",
@@ -284,8 +277,8 @@ async def refresh_token(
     user_id = payload.get("sub")
 
     # Look up user to get fresh claims
-    result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
-    admin = result.scalar_one_or_none()
+    admin_result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
+    admin = admin_result.scalar_one_or_none()
     if admin and admin.status == AdminUserStatus.ACTIVE:
         access_token = create_access_token(
             admin.id, extra_claims={"user_type": "admin", "role": admin.role.value}
@@ -295,8 +288,8 @@ async def refresh_token(
             expires_in=settings.access_token_expire_minutes * 60,
         )
 
-    result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
-    org_user = result.scalar_one_or_none()
+    org_user_result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
+    org_user = org_user_result.scalar_one_or_none()
     if org_user and org_user.status == OrgUserStatus.ACTIVE:
         access_token = create_access_token(
             org_user.id,
@@ -343,9 +336,7 @@ async def forgot_password(
         )
     else:
         # Check admin users
-        result = await db.execute(
-            select(AdminUser).where(AdminUser.email == email)
-        )
+        result = await db.execute(select(AdminUser).where(AdminUser.email == email))
         admin = result.scalar_one_or_none()
         if admin:
             admin.password_reset_token = generate_email_verification_token()
@@ -368,9 +359,7 @@ async def reset_password(
     now = utcnow()
 
     # Check org users first
-    result = await db.execute(
-        select(OrgUser).where(OrgUser.password_reset_token == body.token)
-    )
+    result = await db.execute(select(OrgUser).where(OrgUser.password_reset_token == body.token))
     user = result.scalar_one_or_none()
     if user:
         if user.password_reset_expires and user.password_reset_expires < now:
@@ -383,9 +372,7 @@ async def reset_password(
         return SuccessResponse(message="Password reset successfully")
 
     # Check admin users
-    result = await db.execute(
-        select(AdminUser).where(AdminUser.password_reset_token == body.token)
-    )
+    result = await db.execute(select(AdminUser).where(AdminUser.password_reset_token == body.token))
     admin = result.scalar_one_or_none()
     if admin:
         if admin.password_reset_expires and admin.password_reset_expires < now:
@@ -406,9 +393,7 @@ async def verify_email(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Verify email address with token from welcome email."""
-    result = await db.execute(
-        select(OrgUser).where(OrgUser.email_verification_token == body.token)
-    )
+    result = await db.execute(select(OrgUser).where(OrgUser.email_verification_token == body.token))
     user = result.scalar_one_or_none()
     if not user:
         raise AuthenticationError("Invalid verification token")
@@ -430,13 +415,9 @@ async def setup_2fa(
 
     # Store secret (not yet enabled until verified)
     if isinstance(current_user, AdminUser):
-        result = await db.execute(
-            select(AdminUser).where(AdminUser.id == current_user.id)
-        )
+        result = await db.execute(select(AdminUser).where(AdminUser.id == current_user.id))
     else:
-        result = await db.execute(
-            select(OrgUser).where(OrgUser.id == current_user.id)
-        )
+        result = await db.execute(select(OrgUser).where(OrgUser.id == current_user.id))
     user = result.scalar_one()
     user.totp_secret = secret
 
@@ -470,8 +451,8 @@ async def verify_2fa(
             )
             if expired.get("2fa_setup"):
                 msg = "2FA setup timeout. Please start the setup again."
-        except Exception:
-            pass
+        except Exception as decode_error:
+            logger.debug("Could not inspect expired 2FA token: %s", decode_error)
         raise AuthenticationError(msg)
 
     if not payload.get("2fa_pending"):
@@ -483,11 +464,11 @@ async def verify_2fa(
     user_type = payload.get("user_type")
 
     if user_type == "admin":
-        result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
-        user = result.scalar_one_or_none()
+        user_result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
+        user: AdminUser | OrgUser | None = user_result.scalar_one_or_none()
     else:
-        result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
-        user = result.scalar_one_or_none()
+        user_result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
+        user = user_result.scalar_one_or_none()
 
     if not user or not user.totp_secret:
         raise AuthenticationError("2FA not configured")
@@ -501,9 +482,9 @@ async def verify_2fa(
 
     # Issue full tokens
     extra_claims = {"user_type": user_type}
-    if user_type == "admin":
+    if isinstance(user, AdminUser):
         extra_claims["role"] = user.role.value
-    elif user_type == "org_user":
+    elif isinstance(user, OrgUser):
         extra_claims["org_id"] = str(user.organization_id)
         extra_claims["role"] = user.role_label.value
 
@@ -526,13 +507,9 @@ async def remove_2fa(
     """Disable 2FA. Requires password and a valid TOTP code."""
     # Re-fetch from DB for mutation
     if isinstance(current_user, AdminUser):
-        result = await db.execute(
-            select(AdminUser).where(AdminUser.id == current_user.id)
-        )
+        result = await db.execute(select(AdminUser).where(AdminUser.id == current_user.id))
     else:
-        result = await db.execute(
-            select(OrgUser).where(OrgUser.id == current_user.id)
-        )
+        result = await db.execute(select(OrgUser).where(OrgUser.id == current_user.id))
     user = result.scalar_one()
 
     if not user.totp_enabled and not user.totp_secret:

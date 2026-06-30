@@ -12,7 +12,7 @@ Subscription: backend-sub
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -40,9 +40,9 @@ async def handle_batch_score_complete(message: dict[str, Any]) -> None:
 
     async with async_session_factory() as db:
         async with db.begin():
-            job = (await db.execute(
-                select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
-            )).scalar_one_or_none()
+            job = (
+                await db.execute(select(BulkScoringJob).where(BulkScoringJob.job_id == job_id))
+            ).scalar_one_or_none()
 
             if not job:
                 logger.warning("[batch-complete] BulkScoringJob not found for %s", job_id)
@@ -94,9 +94,9 @@ async def _ingest_results(job_id: str, blob_path: str) -> None:
 
         async with async_session_factory() as db:
             # Fetch the job record for its UUID primary key
-            job = (await db.execute(
-                select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
-            )).scalar_one_or_none()
+            job = (
+                await db.execute(select(BulkScoringJob).where(BulkScoringJob.job_id == job_id))
+            ).scalar_one_or_none()
 
             if not job:
                 logger.error("[batch-ingest] BulkScoringJob %s not found", job_id)
@@ -116,7 +116,9 @@ async def _ingest_results(job_id: str, blob_path: str) -> None:
             try:
                 decision = ScoringDecision(decision_value)
             except ValueError:
-                logger.warning("[batch-ingest] Unknown decision '%s' for %s", decision_value, request_id)
+                logger.warning(
+                    "[batch-ingest] Unknown decision '%s' for %s", decision_value, request_id
+                )
                 errors += 1
                 continue
 
@@ -128,46 +130,48 @@ async def _ingest_results(job_id: str, blob_path: str) -> None:
                         scoring_response["scoring_timestamp"].replace("Z", "+00:00")
                     )
                 except (ValueError, TypeError):
-                    scoring_ts = datetime.now(timezone.utc)
+                    scoring_ts = datetime.now(UTC)
 
             async with async_session_factory() as db:
                 async with db.begin():
                     # Idempotency — skip if already exists
-                    existing = (await db.execute(
-                        select(ScoringResult.id).where(ScoringResult.request_id == request_id)
-                    )).scalar_one_or_none()
+                    existing = (
+                        await db.execute(
+                            select(ScoringResult.id).where(ScoringResult.request_id == request_id)
+                        )
+                    ).scalar_one_or_none()
                     if existing:
                         ingested += 1
                         continue
 
-                    db.add(ScoringResult(
-                        request_id=request_id,
-                        bulk_job_id=bulk_job_uuid,
-                        scoring_timestamp=scoring_ts,
-                        decision=decision,
-                        condition_applied=scoring_response.get("condition_applied", []),
-                        credit_risk=scoring_response.get("credit_risk"),
-                        fraud_detection=scoring_response.get("fraud_detection"),
-                        loan_amount=scoring_response.get("loan_amount"),
-                        income_verification=scoring_response.get("income_verification"),
-                        scoring_metadata=scoring_response.get("scoring_metadata"),
-                        errors=scoring_response.get("refer_reasons"),
-                    ))
+                    db.add(
+                        ScoringResult(
+                            request_id=request_id,
+                            bulk_job_id=bulk_job_uuid,
+                            scoring_timestamp=scoring_ts,
+                            decision=decision,
+                            condition_applied=scoring_response.get("condition_applied", []),
+                            credit_risk=scoring_response.get("credit_risk"),
+                            fraud_detection=scoring_response.get("fraud_detection"),
+                            loan_amount=scoring_response.get("loan_amount"),
+                            income_verification=scoring_response.get("income_verification"),
+                            scoring_metadata=scoring_response.get("scoring_metadata"),
+                            errors=scoring_response.get("refer_reasons"),
+                        )
+                    )
                     ingested += 1
 
         # Update ingested_count and mark complete
         async with async_session_factory() as db:
             async with db.begin():
-                job = (await db.execute(
-                    select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
-                )).scalar_one_or_none()
+                job = (
+                    await db.execute(select(BulkScoringJob).where(BulkScoringJob.job_id == job_id))
+                ).scalar_one_or_none()
                 if job:
                     job.ingested_count = ingested
                     job.ingestion_status = IngestionStatus.COMPLETE
 
-        logger.info(
-            "[batch-ingest] Job %s: ingested=%d errors=%d", job_id, ingested, errors
-        )
+        logger.info("[batch-ingest] Job %s: ingested=%d errors=%d", job_id, ingested, errors)
 
     except Exception as e:
         logger.exception("[batch-ingest] Failed to ingest results for %s: %s", job_id, e)
@@ -179,9 +183,9 @@ async def _mark_ingestion(job_id: str, status: IngestionStatus) -> None:
     try:
         async with async_session_factory() as db:
             async with db.begin():
-                job = (await db.execute(
-                    select(BulkScoringJob).where(BulkScoringJob.job_id == job_id)
-                )).scalar_one_or_none()
+                job = (
+                    await db.execute(select(BulkScoringJob).where(BulkScoringJob.job_id == job_id))
+                ).scalar_one_or_none()
                 if job:
                     job.ingestion_status = status
     except Exception as e:

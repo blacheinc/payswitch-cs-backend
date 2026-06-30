@@ -28,6 +28,7 @@ connection-string-style" credential pattern we use for every other Azure
 service. Managed identity is intentionally avoided so the same deploy
 recipe works in ACA, CI pipelines, and on a developer laptop.
 """
+
 from __future__ import annotations
 
 import logging
@@ -46,27 +47,29 @@ logger = logging.getLogger(__name__)
 # Every secret-bearing field the application reads at runtime should be in
 # this set; adding a new secret is a two-line change (here + the Settings
 # class itself).
-SECRET_FIELDS: frozenset[str] = frozenset({
-    # Infra
-    "database_url",
-    "redis_url",
-    "jwt_secret_key",
-    # Azure services (connection strings)
-    "azure_servicebus_connection_string",
-    "azure_storage_connection_string",
-    "champion_storage_connection_string",
-    # Function app keys (downstream services)
-    "orchestrator_function_key",
-    "de_inference_code",
-    "customer_service_function_key",
-    # External SaaS credentials
-    "xds_username",
-    "xds_password",
-    "resend_api_key",
-    "smtp_password",
-    # First-boot bootstrap admin (rotated immediately after first login)
-    "bootstrap_admin_password",
-})
+SECRET_FIELDS: frozenset[str] = frozenset(
+    {
+        # Infra
+        "database_url",
+        "redis_url",
+        "jwt_secret_key",
+        # Azure services (connection strings)
+        "azure_servicebus_connection_string",
+        "azure_storage_connection_string",
+        "champion_storage_connection_string",
+        # Function app keys (downstream services)
+        "orchestrator_function_key",
+        "de_inference_code",
+        "customer_service_function_key",
+        # External SaaS credentials
+        "xds_username",
+        "xds_password",
+        "resend_api_key",
+        "smtp_password",
+        # First-boot bootstrap admin (rotated immediately after first login)
+        "bootstrap_admin_password",
+    }
+)
 
 
 def _field_name_to_secret_name(field_name: str) -> str:
@@ -174,7 +177,8 @@ class KeyVaultSettingsSource(PydanticBaseSettingsSource):
             logger.log(
                 level,
                 "[keyvault] %s while fetching '%s' — falling back to env",
-                name, secret_name,
+                name,
+                secret_name,
             )
             return None
 
@@ -182,9 +186,7 @@ class KeyVaultSettingsSource(PydanticBaseSettingsSource):
         self._secret_cache[field_name] = value
         return value
 
-    def get_field_value(
-        self, field: FieldInfo, field_name: str
-    ) -> tuple[Any, str, bool]:
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
         value = self._fetch(field_name)
         # (value, field_key, value_is_complex)
         return value, field_name, False

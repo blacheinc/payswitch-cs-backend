@@ -65,8 +65,6 @@ class RateLimiter:
         reset_time = int(now) + 60 - int(now % 60)
         return {
             "X-RateLimit-Limit": settings.rate_limit_per_minute,
-            "X-RateLimit-Remaining": max(
-                0, settings.rate_limit_per_minute - minute_count - 1
-            ),
+            "X-RateLimit-Remaining": max(0, settings.rate_limit_per_minute - minute_count - 1),
             "X-RateLimit-Reset": reset_time,
         }

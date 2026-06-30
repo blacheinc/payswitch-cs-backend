@@ -1,6 +1,7 @@
 import logging
 
 import resend
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,9 @@ class EmailService:
         if self.settings.email_provider == "resend":
             resend.api_key = self.settings.resend_api_key
 
-    def send_email(self, to_email: str, subject: str, html_content: str) -> dict | None:
+    def send_email(
+        self, to_email: str, subject: str, html_content: str
+    ) -> dict[str, str] | resend.Emails.SendResponse | None:
         """Send an email using the configured provider.
 
         Never raises — delivery failures are logged and swallowed so that the
@@ -30,7 +33,7 @@ class EmailService:
 
         if self.settings.email_provider == "resend":
             try:
-                params = {
+                params: resend.Emails.SendParams = {
                     "from": self.settings.email_from,
                     "to": [to_email],
                     "subject": subject,
@@ -40,12 +43,16 @@ class EmailService:
             except Exception as e:
                 logger.warning(
                     "[email] Failed to send '%s' to %s via Resend: %s",
-                    subject, to_email, e,
+                    subject,
+                    to_email,
+                    e,
                 )
                 return None
 
         # Unknown provider — log and return gracefully
-        logger.warning("[email] Provider '%s' not implemented — email not sent", self.settings.email_provider)
+        logger.warning(
+            "[email] Provider '%s' not implemented — email not sent", self.settings.email_provider
+        )
         return None
 
     def _dashboard_link(self, path: str) -> str:
@@ -59,9 +66,7 @@ class EmailService:
         base = (self.settings.dashboard_base_url or "").rstrip("/")
         return f"{base}{path}" if base else path
 
-    def send_password_reset_email(
-        self, to_email: str, token: str, callback_url: str | None = None
-    ):
+    def send_password_reset_email(self, to_email: str, token: str, callback_url: str | None = None):
         if callback_url:
             link = f"{callback_url}?token={token}"
         else:
@@ -76,9 +81,7 @@ class EmailService:
         """
         return self.send_email(to_email, subject, html)
 
-    def send_invite_email(
-        self, to_email: str, temp_password: str, callback_url: str | None = None
-    ):
+    def send_invite_email(self, to_email: str, temp_password: str, callback_url: str | None = None):
         link = callback_url or self._dashboard_link("/login")
 
         subject = "You have been invited to PaySwitch Credit Scoring"
@@ -104,7 +107,8 @@ class EmailService:
             <li>Email: {to_email}</li>
             <li>Temporary Password: <strong>{temp_password}</strong></li>
         </ul>
-        <p>Please login at <a href="{link}">{link}</a> to access your API keys and complete setup.</p>
+        <p>Please login at <a href="{link}">{link}</a> to access your API keys
+        and complete setup.</p>
         """
         return self.send_email(to_email, subject, html)
 

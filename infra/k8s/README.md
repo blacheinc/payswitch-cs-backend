@@ -25,7 +25,7 @@ infra/k8s/
 │   └── example/
 │       └── kustomization.yaml  ← fork per env (prod, staging, …)
 ├── argocd-application.example.yaml
-├── gitlab-ci.example.yml
+├── gitlab-ci.example.yml        ← minimal reference; root .gitlab-ci.yml is canonical
 └── README.md (this file)
 ```
 
@@ -137,19 +137,16 @@ Cons: slower cold start; KV becomes a hard runtime dependency for boot.
 
 ## Migrations
 
-The image's [`entrypoint.sh`](../../entrypoint.sh) runs `alembic upgrade
-head` on every container start. That alone is sufficient for
-single-replica or dev environments.
-
-For production you probably want the **Argo CD pre-sync Job** pattern:
+The supplied base uses the **Argo CD PreSync Job** pattern:
 
 - [`base/job-migrate.yaml`](./base/job-migrate.yaml) is annotated with
   `argocd.argoproj.io/hook: PreSync`. Argo waits for the Job to succeed
   before applying the new Deployment.
 - A failed migration blocks the sync — the new image never serves
   traffic.
-- The Job and entrypoint coexist: the Job runs first, the entrypoint's
-  `alembic upgrade head` becomes a no-op on the second pass.
+- `RUN_DB_MIGRATIONS=false` and `RUN_BOOTSTRAP_ADMIN=false` on API pods
+  prevent replica startup races.
+- The Job's explicit command is the sole migration/bootstrap owner.
 
 To disable the Job entirely (e.g. dev), remove it from
 `base/kustomization.yaml`'s `resources` list.
@@ -161,7 +158,7 @@ To disable the Job entirely (e.g. dev), remove it from
 | Knob | Default | Where |
 |---|---|---|
 | Liveness | `GET /health` every 30 s | `base/deployment.yaml` |
-| Readiness | `GET /health` every 10 s | `base/deployment.yaml` |
+| Readiness | `GET /ready` every 10 s (Postgres + Redis) | `base/deployment.yaml` |
 | Startup probe grace | 5 min (allows alembic on slow DBs) | `base/deployment.yaml` |
 | HPA replicas | min 2, max 10 | `base/hpa.yaml` |
 | HPA target | 70 % CPU, 80 % memory | `base/hpa.yaml` |
@@ -176,13 +173,17 @@ without testing — abrupt shutdowns can leave SB messages stuck in flight.
 
 ## CI
 
-[`gitlab-ci.example.yml`](./gitlab-ci.example.yml) shows the recommended
-GitLab pipeline:
+The repository-root [`.gitlab-ci.yml`](../../.gitlab-ci.yml) is the canonical
+handover pipeline. It runs:
 
-1. **test** — pytest (gates everything else).
-2. **build** — Docker build + push to GitLab Container Registry.
-3. **release** — rewrite the overlay's `kustomization.yaml` with the new
-   image tag and commit. Argo CD picks up the manifest change and syncs.
+1. **quality** — Ruff formatting/lint and mypy.
+2. **test** — 60% overall and 80% critical-path coverage gates.
+3. **security** — pip-audit and Bandit.
+4. **package** — non-root container build and inspection.
+5. **deploy-validate** — Kustomize/Argo policy checks and isolated E2E.
+
+[`gitlab-ci.example.yml`](./gitlab-ci.example.yml) remains a smaller tag-bump
+reference if the client separates application CI from its GitOps repository.
 
 Required CI/CD variables (Project Settings → CI/CD → Variables):
 

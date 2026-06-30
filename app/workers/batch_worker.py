@@ -28,15 +28,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
+import secrets
 import uuid
+from collections.abc import Awaitable
 from datetime import date
+from typing import Any, cast
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
 QUEUE_KEY = "batch:queue"
-POLL_TIMEOUT = 5       # seconds to block on BRPOP before looping again
-WORKER_COUNT = 5       # concurrent workers — tune for XDS rate limits
+POLL_TIMEOUT = 5  # seconds to block on BRPOP before looping again
+WORKER_COUNT = 5  # concurrent workers — tune for XDS rate limits
 STARTUP_STAGGER = 0.1  # seconds between worker starts (anti thundering-herd)
 PRE_BUREAU_JITTER = (0.05, 0.4)  # random sleep range before each bureau call
 
@@ -76,7 +79,9 @@ async def _worker_loop(worker_id: int) -> None:
     while True:
         try:
             client = await cache.get_client()
-            result = await client.brpop(QUEUE_KEY, timeout=POLL_TIMEOUT)
+            result = await cast(
+                Awaitable[list[Any] | None], client.brpop(QUEUE_KEY, timeout=POLL_TIMEOUT)
+            )
             if result is None:
                 # Timeout — nothing in queue, loop back
                 continue
@@ -101,6 +106,8 @@ async def _worker_loop(worker_id: int) -> None:
 
 async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesive)
     """Process one batch item end-to-end inside its own DB session."""
+    from sqlalchemy import select
+
     from app.db import async_session_factory
     from app.db.base import utcnow
     from app.models.batch_job_item import BatchJobItem, BatchJobItemStatus
@@ -114,7 +121,6 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
         fire_de_inference,
     )
     from app.services.xds_client import XDSError, get_xds_client
-    from sqlalchemy import func, select
 
     async with async_session_factory() as db:
         # ── 1. Fetch item ────────────────────────────────────────────────
@@ -130,15 +136,14 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
         if item.status not in (BatchJobItemStatus.PENDING,):
             logger.debug(
                 "[batch_worker] Item %s already in status %s — skipping",
-                item_id, item.status.value,
+                item_id,
+                item.status.value,
             )
             return
 
         # ── 2. Fetch parent job ──────────────────────────────────────────
         job: BulkScoringJob | None = (
-            await db.execute(
-                select(BulkScoringJob).where(BulkScoringJob.id == item.batch_job_id)
-            )
+            await db.execute(select(BulkScoringJob).where(BulkScoringJob.id == item.batch_job_id))
         ).scalar_one_or_none()
 
         if job is None:
@@ -159,27 +164,46 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
         payload = item.payload  # dict from JSONB
 
         # Small jitter to spread concurrent bureau calls across workers
-        await asyncio.sleep(random.uniform(*PRE_BUREAU_JITTER))
+        await asyncio.sleep(secrets.SystemRandom().uniform(*PRE_BUREAU_JITTER))
 
+        demo_outcome: dict[str, Any] | None = None
         try:
             dob_raw = payload.get("date_of_birth")
             if isinstance(dob_raw, str):
                 from datetime import datetime as _dt
-                dob = _dt.fromisoformat(dob_raw).date()
-            else:
-                dob = dob_raw  # already a date object (shouldn't happen from JSONB)
 
-            xds = get_xds_client()
-            raw_xds = await xds.full_bureau_lookup(
-                date_of_birth=dob,
-                consumer_name=payload.get("full_name"),
-                identification=payload.get("identification"),
-                phone_number=payload.get("phone_number"),
-                account_number=payload.get("account_number"),
-                enquiry_reason=payload.get(
-                    "enquiry_reason", "Application for credit by a borrower"
-                ),
-            )
+                dob: date = _dt.fromisoformat(dob_raw).date()
+            elif isinstance(dob_raw, date):
+                dob = dob_raw
+            else:
+                raise ValueError("date_of_birth must be an ISO date string")
+
+            from app.config import get_settings
+
+            if get_settings().demo_simulation_mode:
+                from app.demo.simulation_records import (
+                    get_outcome_by_consumer_id,
+                    get_simulation_report,
+                )
+
+                identification = payload.get("identification")
+                report = get_simulation_report(identification, payload.get("phone_number"))
+                if report is None:
+                    raise XDSError("No demo bureau record found")
+                raw_xds = {"product_45": report, "product_49": {}}
+                demo_outcome = get_outcome_by_consumer_id(identification)
+            else:
+                xds = get_xds_client()
+                raw_xds = await xds.full_bureau_lookup(
+                    date_of_birth=dob,
+                    consumer_name=payload.get("full_name"),
+                    identification=payload.get("identification"),
+                    phone_number=payload.get("phone_number"),
+                    account_number=payload.get("account_number"),
+                    enquiry_reason=payload.get(
+                        "enquiry_reason", "Application for credit by a borrower"
+                    ),
+                )
         except XDSError as e:
             logger.warning(
                 "[batch_worker] Bureau lookup failed for item %s: %s", item_id, e.message
@@ -207,7 +231,66 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
         tracking_id = f"SCR-{uuid.uuid4().hex[:12].upper()}"
 
         try:
-            if hard_stop.passed:
+            if demo_outcome is not None:
+                decision = ScoringDecision(str(demo_outcome["decision"]))
+                score_req = ScoreRequest(
+                    tracking_id=tracking_id,
+                    organization_id=job.organization_id,
+                    status=ScoreRequestStatus.COMPLETED,
+                    request_source=RequestSource.BULK,
+                    request_payload=payload,
+                    created_by_user_id=str(job.created_by_user_id)
+                    if job.created_by_user_id
+                    else None,
+                    score_value=demo_outcome.get("credit_score"),
+                    risk_category=demo_outcome.get("risk_tier"),
+                    confidence=demo_outcome.get("pd_confidence"),
+                    model_version="demo-simulation-v1",
+                    scored_at=utcnow(),
+                )
+                db.add(score_req)
+                await db.flush()
+                db.add(
+                    ScoringResult(
+                        request_id=tracking_id,
+                        score_request_id=score_req.id,
+                        scoring_timestamp=utcnow(),
+                        decision=decision,
+                        condition_applied=demo_outcome.get("conditions", []),
+                        credit_risk={
+                            "probability_of_default": demo_outcome.get("probability_of_default"),
+                            "pd_confidence": demo_outcome.get("pd_confidence"),
+                            "risk_tier": demo_outcome.get("risk_tier"),
+                            "shap_contributions": demo_outcome.get("shap_contributions", []),
+                            "decision_reason_codes": demo_outcome.get("decision_reason_codes", []),
+                            "model_version": "demo-simulation-v1",
+                        },
+                        fraud_detection={
+                            "fraud_anomaly_score": demo_outcome.get("fraud_anomaly_score"),
+                            "fraud_risk_flag": demo_outcome.get("fraud_risk_flag"),
+                            "model_version": "demo-simulation-v1",
+                        },
+                        loan_amount={
+                            "recommended_amount_ghs": demo_outcome.get("recommended_amount_ghs"),
+                            "recommended_loan_tier": demo_outcome.get("recommended_loan_tier"),
+                            "model_version": "demo-simulation-v1",
+                        },
+                        income_verification={
+                            "income_tier": demo_outcome.get("income_tier"),
+                            "income_tier_label": demo_outcome.get("income_tier_label"),
+                            "income_confidence": demo_outcome.get("income_confidence"),
+                            "model_version": "demo-simulation-v1",
+                        },
+                        scoring_metadata={
+                            "credit_score": demo_outcome.get("credit_score"),
+                            "score_grade": demo_outcome.get("score_grade"),
+                            "data_quality_score": demo_outcome.get("data_quality_score"),
+                            "bureau_hit_status": "HIT",
+                            "product_source": "45",
+                        },
+                    )
+                )
+            elif hard_stop.passed:
                 # Normal flow — submit to DE
                 score_req = ScoreRequest(
                     tracking_id=tracking_id,
@@ -215,7 +298,9 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
                     status=ScoreRequestStatus.PROCESSING,
                     request_source=RequestSource.BULK,
                     request_payload=payload,
-                    created_by_user_id=str(job.created_by_user_id) if job.created_by_user_id else None,
+                    created_by_user_id=str(job.created_by_user_id)
+                    if job.created_by_user_id
+                    else None,
                 )
                 db.add(score_req)
                 await db.flush()  # get score_req.id
@@ -238,7 +323,10 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
                     )
                     db.add(error_result)
                     await _fail_item(
-                        db, item, job, "scoring_error",
+                        db,
+                        item,
+                        job,
+                        "scoring_error",
                         f"DE inference failed: {de_err}",
                         score_req_id=score_req.id,
                         tracking_id=tracking_id,
@@ -253,7 +341,9 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
                     status=ScoreRequestStatus.COMPLETED,
                     request_source=RequestSource.BULK,
                     request_payload=payload,
-                    created_by_user_id=str(job.created_by_user_id) if job.created_by_user_id else None,
+                    created_by_user_id=str(job.created_by_user_id)
+                    if job.created_by_user_id
+                    else None,
                     scored_at=utcnow(),
                 )
                 db.add(score_req)
@@ -279,9 +369,7 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
                 db.add(decline_result)
 
         except Exception as e:
-            logger.exception(
-                "[batch_worker] Error creating ScoreRequest for item %s", item_id
-            )
+            logger.exception("[batch_worker] Error creating ScoreRequest for item %s", item_id)
             await _fail_item(db, item, job, "scoring_error", str(e))
             return
 
@@ -297,7 +385,9 @@ async def _process_item(item_id: str) -> None:  # noqa: C901 (complex but cohesi
         await db.commit()
         logger.info(
             "[batch_worker] Item %s completed → ScoreRequest %s (hard_stop=%s)",
-            item_id, tracking_id, not hard_stop.passed,
+            item_id,
+            tracking_id,
+            not hard_stop.passed,
         )
 
 
@@ -310,7 +400,7 @@ async def _fail_item(
     job,
     error_code: str,
     error_message: str,
-    score_req_id: str | None = None,
+    score_req_id: UUID | str | None = None,
     tracking_id: str | None = None,
 ) -> None:
     """Mark item as FAILED and update job counters."""
@@ -332,7 +422,9 @@ async def _fail_item(
     await db.commit()
     logger.warning(
         "[batch_worker] Item %s failed — %s: %s",
-        item.id, error_code, error_message,
+        item.id,
+        error_code,
+        error_message,
     )
 
 
@@ -341,12 +433,17 @@ async def _maybe_finalize_job(db, job) -> None:
 
     Must be called *before* db.commit() so the caller commits everything in one shot.
     """
+    from sqlalchemy import func, select
+
     from app.db.base import utcnow
     from app.models.batch_job_item import BatchJobItem, BatchJobItemStatus
     from app.models.bulk_job import BulkJobStatus
-    from sqlalchemy import func, select
 
-    terminal = {BatchJobItemStatus.COMPLETED, BatchJobItemStatus.FAILED, BatchJobItemStatus.CANCELLED}
+    terminal = {
+        BatchJobItemStatus.COMPLETED,
+        BatchJobItemStatus.FAILED,
+        BatchJobItemStatus.CANCELLED,
+    }
 
     counts = (
         await db.execute(
@@ -357,9 +454,7 @@ async def _maybe_finalize_job(db, job) -> None:
     ).all()
 
     status_map = {row[0]: row[1] for row in counts}
-    total_terminal = sum(
-        v for k, v in status_map.items() if k in terminal
-    )
+    total_terminal = sum(v for k, v in status_map.items() if k in terminal)
 
     if total_terminal < (job.total_records or 0):
         return  # still items in flight
@@ -377,5 +472,8 @@ async def _maybe_finalize_job(db, job) -> None:
 
     logger.info(
         "[batch_worker] Job %s finalized → %s (completed=%d failed=%d)",
-        job.job_id, job.status.value, completed, failed,
+        job.job_id,
+        job.status.value,
+        completed,
+        failed,
     )
