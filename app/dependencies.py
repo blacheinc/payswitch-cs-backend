@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -14,14 +15,17 @@ from app.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
     OrganizationSuspendedError,
+    RateLimitError,
 )
 from app.core.rate_limiter import RateLimiter
 from app.core.security import decode_token, hash_api_key
 from app.db import get_db
 from app.models.api_key import ApiKey, ApiKeyStatus
-from app.models.organization import OrgStatus, Organization
+from app.models.organization import Organization, OrgStatus
 from app.models.user import AdminUser, AdminUserStatus, OrgUser, OrgUserStatus
 from app.storage.cache import get_redis_cache
+
+logger = logging.getLogger(__name__)
 
 # ── HTTP Bearer (optional – used for portal JWT auth) ─────────────────────────
 
@@ -59,9 +63,7 @@ class AuthContext:
 
 
 async def get_current_admin(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(optional_bearer)
-    ],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AdminUser:
     """Authenticate a platform admin via JWT."""
@@ -93,9 +95,7 @@ async def get_current_admin(
 
 
 async def get_current_org_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(optional_bearer)
-    ],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrgUser:
     """Authenticate an organization user via JWT."""
@@ -132,9 +132,7 @@ async def get_current_org_user(
 
 
 async def get_current_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(optional_bearer)
-    ],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> AdminUser | OrgUser:
     """Authenticate either an admin or org user via JWT."""
@@ -155,27 +153,25 @@ async def get_current_user(
         raise AuthenticationError("Invalid token payload")
 
     if user_type == "admin":
-        result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
-        user = result.scalar_one_or_none()
-        if user is None or user.status != AdminUserStatus.ACTIVE:
+        admin_result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
+        admin = admin_result.scalar_one_or_none()
+        if admin is None or admin.status != AdminUserStatus.ACTIVE:
             raise AuthenticationError("User not found or deactivated")
-        return user
+        return admin
 
     if user_type == "org_user":
-        result = await db.execute(
-            select(OrgUser).where(OrgUser.id == user_id).options()
-        )
-        user = result.scalar_one_or_none()
-        if user is None or user.status != OrgUserStatus.ACTIVE:
+        org_user_result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
+        org_user = org_user_result.scalar_one_or_none()
+        if org_user is None or org_user.status != OrgUserStatus.ACTIVE:
             raise AuthenticationError("User not found or inactive")
 
         org_result = await db.execute(
-            select(Organization).where(Organization.id == user.organization_id)
+            select(Organization).where(Organization.id == org_user.organization_id)
         )
         org = org_result.scalar_one_or_none()
         if org is None or org.status == OrgStatus.SUSPENDED:
             raise OrganizationSuspendedError()
-        return user
+        return org_user
 
     raise AuthenticationError("Invalid token type")
 
@@ -185,9 +181,7 @@ async def get_current_user(
 
 async def get_auth_context(
     request: Request,
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(optional_bearer)
-    ],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer)],
     db: AsyncSession = Depends(get_db),
 ) -> AuthContext:
     """Resolve authentication from Authorization: Bearer <token>.
@@ -212,30 +206,30 @@ async def get_auth_context(
         user_id = payload.get("sub")
 
         if user_type == "org_user":
-            result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
-            user = result.scalar_one_or_none()
-            if user is None or user.status != OrgUserStatus.ACTIVE:
+            org_user_result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
+            org_user = org_user_result.scalar_one_or_none()
+            if org_user is None or org_user.status != OrgUserStatus.ACTIVE:
                 raise AuthenticationError("User not found or inactive")
 
             org_result = await db.execute(
-                select(Organization).where(Organization.id == user.organization_id)
+                select(Organization).where(Organization.id == org_user.organization_id)
             )
             org = org_result.scalar_one_or_none()
             if org is None or org.status == OrgStatus.SUSPENDED:
                 raise OrganizationSuspendedError()
 
             return AuthContext(
-                user_id=user.id,
-                user_email=user.email,
+                user_id=org_user.id,
+                user_email=org_user.email,
                 user_type="org_user",
                 organization_id=org.id,
                 organization=org,
-                role=user.role_label.value if user.role_label else None,
+                role=org_user.role_label.value if org_user.role_label else None,
             )
 
         elif user_type == "admin":
-            result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
-            admin = result.scalar_one_or_none()
+            admin_result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
+            admin = admin_result.scalar_one_or_none()
             if admin is None or admin.status != AdminUserStatus.ACTIVE:
                 raise AuthenticationError("Admin not found or deactivated")
 
@@ -248,8 +242,8 @@ async def get_auth_context(
 
     # ── 2. Try as API key ────────────────────────────────────────────────
     key_hash = hash_api_key(token)
-    result = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
-    api_key = result.scalar_one_or_none()
+    api_key_result = await db.execute(select(ApiKey).where(ApiKey.key_hash == key_hash))
+    api_key = api_key_result.scalar_one_or_none()
 
     if api_key is not None and api_key.status == ApiKeyStatus.ACTIVE:
         # Load organization
@@ -284,14 +278,27 @@ async def check_rate_limit(
     auth: Annotated[AuthContext, Depends(get_auth_context)],
     request: Request,
 ) -> AuthContext:
-    """Enforce rate limits based on the resolved organization."""
+    """Enforce rate limits based on the resolved organization.
+
+    Fails OPEN: if Redis is unavailable, the request is allowed rather than
+    500'd. A real limit breach (``RateLimitError``) still propagates as 429.
+    """
     if auth.organization_id:
-        redis_cache = get_redis_cache()
-        client = await redis_cache.get_client()
-        limiter = RateLimiter(client)
-        rate_headers = await limiter.check_rate_limit(str(auth.organization_id))
-        # Store headers for the response
-        request.state.rate_limit_headers = rate_headers
+        try:
+            redis_cache = get_redis_cache()
+            client = await redis_cache.get_client()
+            limiter = RateLimiter(client)
+            rate_headers = await limiter.check_rate_limit(str(auth.organization_id))
+            # Store headers for the response
+            request.state.rate_limit_headers = rate_headers
+        except RateLimitError:
+            raise
+        except Exception as e:  # Redis down/slow — don't take the API down with it
+            logger.warning(
+                "Rate limiter unavailable (%s: %s) — allowing request (fail-open)",
+                type(e).__name__,
+                e,
+            )
 
     # Expose auth context on request.state for API logging middleware
     request.state.organization_id = auth.organization_id
@@ -316,7 +323,6 @@ def require_any_permission(*codes: str):
         auth: Annotated[AuthContext, Depends(check_rate_limit)],
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> AuthContext:
-        from app.core.exceptions import AuthorizationError
         from app.services.permissions import load_user_permissions
 
         permissions = await load_user_permissions(db, auth)
@@ -339,7 +345,12 @@ def require_permission(code: str):
     Usage::
 
         @router.post("/something")
-        async def handler(auth: Annotated[AuthContext, Depends(require_permission("score_requests.create"))]):
+        async def handler(
+            auth: Annotated[
+                AuthContext,
+                Depends(require_permission("score_requests.create")),
+            ],
+        ):
             ...
     """
 
@@ -347,7 +358,6 @@ def require_permission(code: str):
         auth: Annotated[AuthContext, Depends(check_rate_limit)],
         db: Annotated[AsyncSession, Depends(get_db)],
     ) -> AuthContext:
-        from app.core.exceptions import AuthorizationError
         from app.services.permissions import load_user_permissions
 
         permissions = await load_user_permissions(db, auth)

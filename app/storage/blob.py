@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import BinaryIO
+from datetime import UTC, datetime, timedelta
+from typing import BinaryIO, cast
 
 from app.config import get_settings
 
@@ -50,7 +50,7 @@ class BlobStorageClient:
 
         blob_client = container_client.get_blob_client(blob_name)
         blob_client.upload_blob(data, overwrite=True, content_type=content_type)
-        return blob_client.url
+        return cast(str, blob_client.url)
 
     def generate_download_url(
         self,
@@ -70,7 +70,7 @@ class BlobStorageClient:
             blob_name=blob_name,
             account_key=client.credential.account_key,
             permission=BlobSasPermissions(read=True),
-            expiry=datetime.now(timezone.utc) + timedelta(hours=expiry_hours),
+            expiry=datetime.now(UTC) + timedelta(hours=expiry_hours),
         )
         blob_client = client.get_blob_client(container_name, blob_name)
         return f"{blob_client.url}?{sas_token}"
@@ -81,7 +81,7 @@ class BlobStorageClient:
         if client is None:
             return None
         blob_client = client.get_blob_client(container_name, blob_name)
-        return blob_client.download_blob().readall()
+        return cast(bytes, blob_client.download_blob().readall())
 
     def delete_blob(self, container_name: str, blob_name: str) -> None:
         """Delete a blob."""

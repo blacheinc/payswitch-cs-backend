@@ -16,7 +16,6 @@ from app.core.security import (
     generate_api_key,
     generate_email_verification_token,
     generate_temp_password,
-    generate_webhook_secret,
     hash_password,
 )
 from app.db import get_db
@@ -67,9 +66,7 @@ async def get_org_profile(
     auth: Annotated[AuthContext, Depends(require_permission("org.read"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
-    result = await db.execute(
-        select(Organization).where(Organization.id == auth.organization_id)
-    )
+    result = await db.execute(select(Organization).where(Organization.id == auth.organization_id))
     org = result.scalar_one()
     return OrganizationResponse.model_validate(org)
 
@@ -80,9 +77,7 @@ async def update_org_profile(
     auth: Annotated[AuthContext, Depends(require_permission("org.update"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrganizationResponse:
-    result = await db.execute(
-        select(Organization).where(Organization.id == auth.organization_id)
-    )
+    result = await db.execute(select(Organization).where(Organization.id == auth.organization_id))
     org = result.scalar_one()
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(org, field, value)
@@ -96,9 +91,7 @@ async def update_org_profile(
 users_router = APIRouter(prefix="/org/users", tags=["Org Portal – Users"])
 
 
-async def _resolve_role_for_invite(
-    db: AsyncSession, role_id: UUID | None, org_id
-) -> Role:
+async def _resolve_role_for_invite(db: AsyncSession, role_id: UUID | None, org_id) -> Role:
     """Return the Role to assign when inviting a user.
 
     If role_id is provided it must exist, be org-scoped, and belong to the
@@ -106,9 +99,7 @@ async def _resolve_role_for_invite(
     role is used.
     """
     if role_id is not None:
-        role = (
-            await db.execute(select(Role).where(Role.id == role_id))
-        ).scalar_one_or_none()
+        role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
         if not role:
             raise NotFoundError("Role", str(role_id))
         if role.scope != "org":
@@ -128,16 +119,17 @@ async def _resolve_role_for_invite(
     return admin_role
 
 
-@users_router.post(
-    "", response_model=OrgUserResponse, status_code=status.HTTP_201_CREATED
-)
+@users_router.post("", response_model=OrgUserResponse, status_code=status.HTTP_201_CREATED)
 async def invite_user(
     body: InviteUserRequest,
     auth: Annotated[AuthContext, Depends(require_permission("users.invite"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> OrgUserResponse:
     """Invite a new user to the organization."""
-    role = await _resolve_role_for_invite(db, body.role_id, auth.organization_id)
+    organization_id = auth.organization_id
+    if organization_id is None:
+        raise ValidationError("Organization context is required")
+    role = await _resolve_role_for_invite(db, body.role_id, organization_id)
 
     existing = await db.execute(select(OrgUser).where(OrgUser.email == body.email))
     existing_user = existing.scalar_one_or_none()
@@ -150,7 +142,7 @@ async def invite_user(
         # PENDING — user was invited but hasn't logged in yet; resend the invite
         if existing_user.status == OrgUserStatus.PENDING:
             temp_password = generate_temp_password()
-            existing_user.organization_id = auth.organization_id
+            existing_user.organization_id = organization_id
             existing_user.name = body.name
             existing_user.password_hash = hash_password(temp_password)
             existing_user.role_label = _coerce_role_label(body.role_label)
@@ -166,11 +158,13 @@ async def invite_user(
                 existing_rbac.role_id = role.id
                 existing_rbac.assigned_by = auth.user_id
             else:
-                db.add(OrgUserRole(
-                    org_user_id=existing_user.id,
-                    role_id=role.id,
-                    assigned_by=auth.user_id,
-                ))
+                db.add(
+                    OrgUserRole(
+                        org_user_id=existing_user.id,
+                        role_id=role.id,
+                        assigned_by=auth.user_id,
+                    )
+                )
             await db.flush()
 
             email_service.send_invite_email(
@@ -182,7 +176,7 @@ async def invite_user(
 
         # REMOVED — re-activate
         temp_password = generate_temp_password()
-        existing_user.organization_id = auth.organization_id
+        existing_user.organization_id = organization_id
         existing_user.name = body.name
         existing_user.password_hash = hash_password(temp_password)
         existing_user.role_label = _coerce_role_label(body.role_label)
@@ -193,19 +187,19 @@ async def invite_user(
         await db.flush()
 
         existing_rbac = (
-            await db.execute(
-                select(OrgUserRole).where(OrgUserRole.org_user_id == existing_user.id)
-            )
+            await db.execute(select(OrgUserRole).where(OrgUserRole.org_user_id == existing_user.id))
         ).scalar_one_or_none()
         if existing_rbac:
             existing_rbac.role_id = role.id
             existing_rbac.assigned_by = auth.user_id
         else:
-            db.add(OrgUserRole(
-                org_user_id=existing_user.id,
-                role_id=role.id,
-                assigned_by=auth.user_id,
-            ))
+            db.add(
+                OrgUserRole(
+                    org_user_id=existing_user.id,
+                    role_id=role.id,
+                    assigned_by=auth.user_id,
+                )
+            )
         await db.flush()
 
         email_service.send_invite_email(
@@ -233,11 +227,13 @@ async def invite_user(
     except IntegrityError:
         raise ConflictError(f"User with email '{body.email}' already exists")
 
-    db.add(OrgUserRole(
-        org_user_id=new_user.id,
-        role_id=role.id,
-        assigned_by=auth.user_id,
-    ))
+    db.add(
+        OrgUserRole(
+            org_user_id=new_user.id,
+            role_id=role.id,
+            assigned_by=auth.user_id,
+        )
+    )
     await db.flush()
 
     email_service.send_invite_email(
@@ -363,19 +359,19 @@ async def update_user(
     if new_role_id is not None:
         role = await _resolve_role_for_invite(db, new_role_id, auth.organization_id)
         existing_rbac = (
-            await db.execute(
-                select(OrgUserRole).where(OrgUserRole.org_user_id == target.id)
-            )
+            await db.execute(select(OrgUserRole).where(OrgUserRole.org_user_id == target.id))
         ).scalar_one_or_none()
         if existing_rbac:
             existing_rbac.role_id = role.id
             existing_rbac.assigned_by = auth.user_id
         else:
-            db.add(OrgUserRole(
-                org_user_id=target.id,
-                role_id=role.id,
-                assigned_by=auth.user_id,
-            ))
+            db.add(
+                OrgUserRole(
+                    org_user_id=target.id,
+                    role_id=role.id,
+                    assigned_by=auth.user_id,
+                )
+            )
 
     await db.flush()
     await db.refresh(target)
@@ -401,9 +397,7 @@ async def suspend_user(
     if target.id == auth.user_id:
         raise ConflictError("Cannot suspend yourself")
     if target.status != OrgUserStatus.ACTIVE:
-        raise ConflictError(
-            f"Can only suspend active users, current: '{target.status.value}'"
-        )
+        raise ConflictError(f"Can only suspend active users, current: '{target.status.value}'")
 
     target.status = OrgUserStatus.SUSPENDED
     await db.flush()
@@ -439,9 +433,7 @@ async def activate_user(
 api_keys_router = APIRouter(prefix="/org/api-keys", tags=["Org Portal – API Keys"])
 
 
-@api_keys_router.post(
-    "", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED
-)
+@api_keys_router.post("", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_api_key(
     body: CreateApiKeyRequest,
     auth: Annotated[AuthContext, Depends(require_permission("api_keys.create"))],
@@ -535,9 +527,7 @@ async def list_webhook_events() -> list[dict]:
     return WEBHOOK_EVENTS
 
 
-@webhooks_router.post(
-    "", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED
-)
+@webhooks_router.post("", response_model=WebhookResponse, status_code=status.HTTP_201_CREATED)
 async def create_webhook(
     body: CreateWebhookRequest,
     auth: Annotated[AuthContext, Depends(require_permission("webhooks.manage"))],
@@ -560,9 +550,7 @@ async def list_webhooks(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[WebhookResponse]:
     result = await db.execute(
-        select(WebhookConfig).where(
-            WebhookConfig.organization_id == auth.organization_id
-        )
+        select(WebhookConfig).where(WebhookConfig.organization_id == auth.organization_id)
     )
     configs = result.scalars().all()
     return [WebhookResponse.model_validate(c) for c in configs]
@@ -628,12 +616,8 @@ async def list_api_logs(
         description="Status class filter, e.g. 4xx or 5xx",
     ),
     path: str | None = Query(default=None, description="Partial path match"),
-    api_key_prefix: str | None = Query(
-        default=None, description="Filter by API key prefix"
-    ),
-    from_date: str | None = Query(
-        default=None, description="ISO date, e.g. 2026-01-01"
-    ),
+    api_key_prefix: str | None = Query(default=None, description="Filter by API key prefix"),
+    from_date: str | None = Query(default=None, description="ISO date, e.g. 2026-01-01"),
     to_date: str | None = Query(default=None, description="ISO date, e.g. 2026-02-01"),
 ):
     """Paginated list of API request logs for the authenticated organisation."""
@@ -658,9 +642,7 @@ async def list_api_logs(
     if status_class:
         base = int(status_class[0]) * 100
         query = query.where(ApiLog.status_code >= base, ApiLog.status_code < base + 100)
-        count_query = count_query.where(
-            ApiLog.status_code >= base, ApiLog.status_code < base + 100
-        )
+        count_query = count_query.where(ApiLog.status_code >= base, ApiLog.status_code < base + 100)
     if path:
         query = query.where(ApiLog.path.ilike(f"%{path}%"))
         count_query = count_query.where(ApiLog.path.ilike(f"%{path}%"))
@@ -692,9 +674,7 @@ async def list_api_logs(
 
     return PaginatedResponse.create(
         items=[
-            ApiLogResponse.model_validate(log).model_copy(
-                update={"actor": pick_actor(log, actors)}
-            )
+            ApiLogResponse.model_validate(log).model_copy(update={"actor": pick_actor(log, actors)})
             for log in logs
         ],
         total=total,

@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: payswitch_integration
+      POSTGRES_USER: payswitch
+      POSTGRES_PASSWORD: integration-only-password
+    ports:
+      - "55432:5432"
+    volumes:
+      - payswitch-integration-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payswitch -d payswitch_integration"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+    volumes:
+      - payswitch-integration-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      target: integration
+    ports:
+      - "58000:8000"
+    environment:
+      APP_ENV: development
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://payswitch:integration-only-password@postgres:5432/payswitch_integration
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: integration-only-jwt-secret-at-least-32-characters
+      EMAIL_PROVIDER: console
+      DEMO_SIMULATION_MODE: "true"
+      DEMO_BUREAU_DELAY_SECONDS: "0"
+      DEMO_SCORING_DELAY_SECONDS: "0"
+      RUN_DB_MIGRATIONS: "true"
+      RUN_BOOTSTRAP_ADMIN: "false"
+      AZURE_SERVICEBUS_CONNECTION_STRING: ""
+      AZURE_STORAGE_CONNECTION_STRING: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  payswitch-integration-postgres:
+  payswitch-integration-redis:

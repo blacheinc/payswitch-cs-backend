@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+import time
+from collections.abc import Awaitable
+from typing import Any, cast
 
 import redis.asyncio as redis
 
@@ -12,6 +14,106 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+class InMemoryRedis:
+    """Small async Redis-compatible backend for isolated local/E2E runs.
+
+    Enabled only with ``REDIS_URL=memory://``. Production deployments continue
+    to require Redis; this backend keeps deterministic handover tests free from
+    host-level service dependencies.
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
+        self.sorted_sets: dict[str, dict[str, float]] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, ex: int | None = None) -> None:
+        self.values[key] = value
+
+    async def delete(self, key: str) -> None:
+        self.values.pop(key, None)
+
+    async def exists(self, key: str) -> int:
+        return int(key in self.values)
+
+    async def ping(self) -> bool:
+        return True
+
+    async def close(self) -> None:
+        return None
+
+    async def lpush(self, key: str, value: str) -> int:
+        values = self.lists.setdefault(key, [])
+        values.insert(0, value)
+        return len(values)
+
+    async def brpop(self, key: str, timeout: int = 0) -> list[str] | None:
+        deadline = time.monotonic() + timeout if timeout else None
+        while deadline is None or time.monotonic() < deadline:
+            values = self.lists.setdefault(key, [])
+            if values:
+                return [key, values.pop()]
+            await __import__("asyncio").sleep(0.05)
+        return None
+
+    def pipeline(self, transaction: bool = True) -> InMemoryPipeline:
+        return InMemoryPipeline(self)
+
+
+class InMemoryPipeline:
+    def __init__(self, client: InMemoryRedis) -> None:
+        self.client = client
+        self.commands: list[tuple[str, tuple[Any, ...]]] = []
+
+    def lpush(self, key: str, value: str) -> InMemoryPipeline:
+        self.commands.append(("lpush", (key, value)))
+        return self
+
+    def zremrangebyscore(self, key: str, minimum: float, maximum: float) -> InMemoryPipeline:
+        self.commands.append(("zremrangebyscore", (key, minimum, maximum)))
+        return self
+
+    def zcard(self, key: str) -> InMemoryPipeline:
+        self.commands.append(("zcard", (key,)))
+        return self
+
+    def zadd(self, key: str, mapping: dict[str, float]) -> InMemoryPipeline:
+        self.commands.append(("zadd", (key, mapping)))
+        return self
+
+    def expire(self, key: str, seconds: int) -> InMemoryPipeline:
+        self.commands.append(("expire", (key, seconds)))
+        return self
+
+    async def execute(self) -> list[int]:
+        results: list[int] = []
+        for name, args in self.commands:
+            if name == "lpush":
+                results.append(await self.client.lpush(cast(str, args[0]), cast(str, args[1])))
+            elif name == "zremrangebyscore":
+                key, minimum, maximum = cast(tuple[str, float, float], args)
+                values = self.client.sorted_sets.setdefault(key, {})
+                removed = [
+                    member for member, score in values.items() if minimum <= score <= maximum
+                ]
+                for member in removed:
+                    del values[member]
+                results.append(len(removed))
+            elif name == "zcard":
+                results.append(len(self.client.sorted_sets.setdefault(cast(str, args[0]), {})))
+            elif name == "zadd":
+                key, mapping = cast(tuple[str, dict[str, float]], args)
+                self.client.sorted_sets.setdefault(key, {}).update(mapping)
+                results.append(len(mapping))
+            else:  # expiry is irrelevant for the short-lived integration process
+                results.append(1)
+        self.commands.clear()
+        return results
 
 
 class RedisCache:
@@ -22,18 +124,21 @@ class RedisCache:
 
     async def get_client(self) -> redis.Redis:
         if self._client is None:
-            self._client = redis.from_url(
-                settings.redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
-            )
+            if settings.redis_url == "memory://":
+                self._client = cast(redis.Redis, InMemoryRedis())
+            else:
+                self._client = redis.from_url(
+                    settings.redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                )
         return self._client
 
     # ── Key-Value operations ──────────────────────────────────────────────
 
     async def get(self, key: str) -> str | None:
         client = await self.get_client()
-        return await client.get(key)
+        return cast(str | None, await client.get(key))
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> None:
         client = await self.get_client()
@@ -53,12 +158,10 @@ class RedisCache:
         """Get cached response for an idempotency key."""
         raw = await self.get(f"idempotency:{key}")
         if raw:
-            return json.loads(raw)
+            return cast(dict[str, Any], json.loads(raw))
         return None
 
-    async def set_idempotency(
-        self, key: str, response: dict[str, Any], ttl: int = 86400
-    ) -> None:
+    async def set_idempotency(self, key: str, response: dict[str, Any], ttl: int = 86400) -> None:
         """Cache a response for an idempotency key (24h default TTL)."""
         await self.set(f"idempotency:{key}", json.dumps(response), ttl=ttl)
 
@@ -76,7 +179,7 @@ class RedisCache:
     async def ping(self) -> bool:
         try:
             client = await self.get_client()
-            return await client.ping()
+            return bool(await cast(Awaitable[bool], client.ping()))
         except Exception:
             return False
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # Each entry defines:
 #   threshold  – the numeric boundary
 #   op         – comparison operator (">" or "<")

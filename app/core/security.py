@@ -5,12 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 import pyotp
-from jose import JWTError, jwt
+from jose import jwt
 from passlib.context import CryptContext
 
 from app.config import get_settings
@@ -41,19 +41,17 @@ def create_access_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Create a short-lived access JWT."""
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
-    )
+    issued_at = datetime.now(UTC)
+    expire = issued_at + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode: dict[str, Any] = {
         "sub": str(subject),
+        "iat": issued_at,
         "exp": expire,
         "type": "access",
     }
     if extra_claims:
         to_encode.update(extra_claims)
-    return jwt.encode(
-        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
-    )
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def create_refresh_token(
@@ -61,25 +59,21 @@ def create_refresh_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Create a long-lived refresh JWT."""
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(days=settings.refresh_token_expire_days)
-    )
+    issued_at = datetime.now(UTC)
+    expire = issued_at + (expires_delta or timedelta(days=settings.refresh_token_expire_days))
     to_encode: dict[str, Any] = {
         "sub": str(subject),
+        "iat": issued_at,
         "exp": expire,
         "type": "refresh",
         "jti": secrets.token_hex(16),
     }
-    return jwt.encode(
-        to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm
-    )
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> dict[str, Any]:
     """Decode and validate a JWT. Raises JWTError on failure."""
-    return jwt.decode(
-        token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm]
-    )
+    return jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
 
 
 # ── API Key Generation ────────────────────────────────────────────────────────

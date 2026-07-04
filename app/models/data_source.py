@@ -7,6 +7,7 @@ Supports the full ingestion pipeline:
 from __future__ import annotations
 
 import enum
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -22,7 +23,6 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 # ── Enums ────────────────────────────────────────────────────────────────────
 
 
-class SourceType(str, enum.Enum):
+class SourceType(enum.StrEnum):
     BANK = "bank"
     BUREAU = "bureau"
     TELCO = "telco"
@@ -43,7 +43,7 @@ class SourceType(str, enum.Enum):
     OTHER = "other"
 
 
-class UploadStatus(str, enum.Enum):
+class UploadStatus(enum.StrEnum):
     INGESTING = "ingesting"
     INGESTED = "ingested"
     TRANSFORMING = "transforming"
@@ -53,7 +53,7 @@ class UploadStatus(str, enum.Enum):
     ERROR = "error"
 
 
-class FileFormat(str, enum.Enum):
+class FileFormat(enum.StrEnum):
     CSV = "csv"
     JSON = "json"
     XLSX = "xlsx"
@@ -61,13 +61,13 @@ class FileFormat(str, enum.Enum):
     TXT = "txt"
 
 
-class ConfidenceLevel(str, enum.Enum):
+class ConfidenceLevel(enum.StrEnum):
     GREEN = "green"  # > 0.90
     YELLOW = "yellow"  # 0.60 – 0.90
     RED = "red"  # < 0.60
 
 
-class MappingSource(str, enum.Enum):
+class MappingSource(enum.StrEnum):
     TEMPLATE = "template"
     LLM = "llm"
     MANUAL = "manual"
@@ -82,9 +82,7 @@ class DataSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "data_sources"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    short_code: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    short_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     source_type: Mapped[SourceType] = mapped_column(
         Enum(
             SourceType,
@@ -98,10 +96,10 @@ class DataSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_upload_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    uploads: Mapped[list["TrainingUpload"]] = relationship(
+    uploads: Mapped[list[TrainingUpload]] = relationship(
         back_populates="data_source", lazy="selectin"
     )
-    templates: Mapped[list["MappingTemplate"]] = relationship(
+    templates: Mapped[list[MappingTemplate]] = relationship(
         back_populates="data_source", lazy="selectin"
     )
 
@@ -114,7 +112,7 @@ class TrainingUpload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "training_uploads"
 
-    data_source_id: Mapped[str] = mapped_column(
+    data_source_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("data_sources.id"), nullable=False, index=True
     )
     status: Mapped[UploadStatus] = mapped_column(
@@ -149,8 +147,7 @@ class TrainingUpload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # ML pipeline fields
     training_id: Mapped[str | None] = mapped_column(
-        String(100), index=True,
-        comment="AI pipeline training run ID, e.g. TRAIN-20260325-163000"
+        String(100), index=True, comment="AI pipeline training run ID, e.g. TRAIN-20260325-163000"
     )
     models_to_train: Mapped[list | None] = mapped_column(
         JSONB, comment="List of models requested for training"
@@ -158,43 +155,37 @@ class TrainingUpload(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Mapping stats
     features_mapped: Mapped[int | None] = mapped_column(Integer)
-    target_features_total: Mapped[int] = mapped_column(
-        Integer, default=18, server_default="18"
-    )
+    target_features_total: Mapped[int] = mapped_column(Integer, default=18, server_default="18")
 
     # Quality
     quality_report: Mapped[dict | None] = mapped_column(JSONB)
     quality_score: Mapped[float | None] = mapped_column(Numeric(3, 2))
 
     # Template used (if any)
-    mapping_template_id: Mapped[str | None] = mapped_column(
+    mapping_template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("mapping_templates.id")
     )
 
     # Admin actions
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
-    uploaded_by_id: Mapped[str | None] = mapped_column(
+    uploaded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id")
     )
-    approved_by_id: Mapped[str | None] = mapped_column(
+    approved_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("admin_users.id")
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    data_source: Mapped["DataSource"] = relationship(back_populates="uploads")
-    uploaded_by: Mapped["AdminUser | None"] = relationship(
-        foreign_keys=[uploaded_by_id]
-    )
-    approved_by: Mapped["AdminUser | None"] = relationship(
-        foreign_keys=[approved_by_id]
-    )
-    field_mappings: Mapped[list["FieldMapping"]] = relationship(
+    data_source: Mapped[DataSource] = relationship(back_populates="uploads")
+    uploaded_by: Mapped[AdminUser | None] = relationship(foreign_keys=[uploaded_by_id])
+    approved_by: Mapped[AdminUser | None] = relationship(foreign_keys=[approved_by_id])
+    field_mappings: Mapped[list[FieldMapping]] = relationship(
         back_populates="training_upload", cascade="all, delete-orphan", lazy="selectin"
     )
-    mapping_template: Mapped["MappingTemplate | None"] = relationship(
+    mapping_template: Mapped[MappingTemplate | None] = relationship(
         foreign_keys=[mapping_template_id]
     )
 
@@ -207,7 +198,7 @@ class FieldMapping(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "field_mappings"
 
-    training_upload_id: Mapped[str] = mapped_column(
+    training_upload_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("training_uploads.id", ondelete="CASCADE"),
         nullable=False,
@@ -215,9 +206,7 @@ class FieldMapping(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     source_field: Mapped[str] = mapped_column(String(200), nullable=False)
     target_feature: Mapped[str] = mapped_column(String(100), nullable=False)
-    confidence: Mapped[float] = mapped_column(
-        Numeric(5, 4), default=0.0, nullable=False
-    )
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4), default=0.0, nullable=False)
     confidence_level: Mapped[ConfidenceLevel] = mapped_column(
         Enum(
             ConfidenceLevel,
@@ -238,15 +227,11 @@ class FieldMapping(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     sample_values: Mapped[list | None] = mapped_column(JSONB)
     data_type_detected: Mapped[str | None] = mapped_column(String(50))
-    is_approved: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default="false"
-    )
+    is_approved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     admin_override_target: Mapped[str | None] = mapped_column(String(100))
 
     # Relationships
-    training_upload: Mapped["TrainingUpload"] = relationship(
-        back_populates="field_mappings"
-    )
+    training_upload: Mapped[TrainingUpload] = relationship(back_populates="field_mappings")
 
 
 # ── Mapping Template ────────────────────────────────────────────────────────
@@ -261,7 +246,7 @@ class MappingTemplate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "mapping_templates"
 
-    data_source_id: Mapped[str] = mapped_column(
+    data_source_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("data_sources.id"), nullable=False, index=True
     )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -269,12 +254,12 @@ class MappingTemplate(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
-    created_from_upload_id: Mapped[str | None] = mapped_column(
+    created_from_upload_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("training_uploads.id")
     )
 
     # Relationships
-    data_source: Mapped["DataSource"] = relationship(back_populates="templates")
-    created_from_upload: Mapped["TrainingUpload | None"] = relationship(
+    data_source: Mapped[DataSource] = relationship(back_populates="templates")
+    created_from_upload: Mapped[TrainingUpload | None] = relationship(
         foreign_keys=[created_from_upload_id]
     )

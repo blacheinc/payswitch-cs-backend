@@ -14,7 +14,7 @@ raises at boot time via :meth:`Settings.validate_production`.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -65,9 +65,7 @@ class Settings(BaseSettings):
     app_env: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     api_v1_prefix: str = "/v1"
-    allowed_origins: list[str] = Field(
-        default_factory=lambda: ["http://localhost:3000"]
-    )
+    allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
@@ -77,15 +75,15 @@ class Settings(BaseSettings):
         return v
 
     # ── Server ───────────────────────────────────────────────────────────────
-    host: str = "0.0.0.0"
+    # Container ingress requires all-interface binding; network exposure is
+    # constrained by Kubernetes Service/Ingress and NetworkPolicy resources.
+    host: str = "0.0.0.0"  # nosec B104
     port: int = 8000
 
     # ── PostgreSQL ───────────────────────────────────────────────────────────
     # Dev default points at the docker-compose postgres. Overridden in every
     # non-dev environment.
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/credit_scoring"
-    )
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/credit_scoring"
     database_pool_size: int = 20
     database_max_overflow: int = 10
 
@@ -112,6 +110,16 @@ class Settings(BaseSettings):
     # ── DE Inference Function App (ML scoring) ───────────────────────────────
     de_inference_url: str = ""
     de_inference_code: str = ""
+
+    # ── Demo simulation ──────────────────────────────────────────────────────
+    # When true, bureau-lookup and score-request serve deterministic stored
+    # answers for the five demo records (no XDS, no AI pipeline). See
+    # app/demo/simulation_records.py.
+    demo_simulation_mode: bool = False
+    # Artificial latency (seconds) so the simulated flow feels real rather than
+    # instant. Applied only in simulation mode; a small jitter is added on top.
+    demo_bureau_delay_seconds: float = 2.0
+    demo_scoring_delay_seconds: float = 5.0
 
     # ── Customer Service Function App ────────────────────────────────────────
     customer_service_base_url: str = ""
@@ -261,6 +269,8 @@ class Settings(BaseSettings):
         # an older deploy that still ships the legacy literal.
         if self.jwt_secret_key.strip().startswith("CHANGE-ME"):
             missing.append("jwt_secret_key (placeholder value)")
+        if self.redis_url.strip().lower() == "memory://":
+            missing.append("redis_url (memory:// is integration-only)")
 
         if missing:
             raise RuntimeError(

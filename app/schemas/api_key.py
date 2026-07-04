@@ -10,9 +10,6 @@ from pydantic import BaseModel, Field
 from app.schemas.common import BaseSchema
 
 
-from uuid import UUID
-
-
 class CreateApiKeyRequest(BaseModel):
     name: str = Field(max_length=100)
     environment: str = Field(description="sandbox or production")

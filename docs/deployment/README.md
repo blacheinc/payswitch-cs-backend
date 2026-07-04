@@ -10,7 +10,7 @@ This document is the table of contents for the operational docs. If you're deplo
 
 Read [`docs/architecture/overview.md`](../architecture/overview.md) first. One FastAPI container backed by Postgres / Redis / Service Bus / Storage / Key Vault. Everything provisioned by one Bicep template; everything deployable with one shell script.
 
-> **Deploying to Kubernetes instead?** The same image and the same env-var contract work on k8s. See [`k8s-overview.md`](./k8s-overview.md) for the architecture talking points and [`infra/k8s/README.md`](../../infra/k8s/README.md) for working Kustomize manifests + Argo CD + GitLab CI examples. The rest of this guide is specific to the Azure Container Apps target.
+> **Deploying to Kubernetes instead?** The same image and environment contract work on Kubernetes. See [`k8s-overview.md`](./k8s-overview.md) for the integration architecture and [`infra/k8s/README.md`](../../infra/k8s/README.md) for the Kustomize manifests, Argo CD application and GitLab CI reference. The remainder of this guide covers the Azure Container Apps target.
 
 ---
 
@@ -102,11 +102,14 @@ If step 6 succeeds, you're live.
 - Rotating the service principal secret.
 - Disaster recovery: restore Postgres from backup.
 
+[`key-vault-setup.md`](./key-vault-setup.md) — covers the service-principal,
+secret resolution, rotation and Kubernetes integration contract.
+
 ---
 
 ## 7. When things go wrong
 
-[`troubleshooting.md`](./troubleshooting.md) — a grep-able list of known failure modes and their fixes.
+[`troubleshooting.md`](./troubleshooting.md) — operational diagnostics and recovery procedures.
 
 ---
 

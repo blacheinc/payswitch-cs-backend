@@ -93,6 +93,7 @@ async def lifespan(app: FastAPI):
 
     # Start internal batch scoring workers (Redis queue consumers)
     from app.workers.batch_worker import start_batch_workers
+
     _batch_worker_tasks = start_batch_workers()
 
     yield
@@ -104,6 +105,7 @@ async def lifespan(app: FastAPI):
     for task in _batch_worker_tasks:
         task.cancel()
     import asyncio as _asyncio
+
     await _asyncio.gather(*_batch_worker_tasks, return_exceptions=True)
     logger.info("Batch workers stopped")
 
@@ -142,12 +144,11 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # ── Routers ──────────────────────────────────────────────────────────
-    from app.routers.health import router as health_router
-    from app.routers.auth import router as auth_router
     from app.routers.admin_organizations import router as admin_orgs_router
-    from app.routers.admin_training_data import router as admin_training_data_router
     from app.routers.admin_sources import router as admin_sources_router
-    from app.routers.score_requests import router as score_requests_router
+    from app.routers.admin_training_data import router as admin_training_data_router
+    from app.routers.auth import router as auth_router
+    from app.routers.health import router as health_router
     from app.routers.org_portal import (
         api_keys_router,
         api_logs_router,
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
         users_router,
         webhooks_router,
     )
+    from app.routers.score_requests import router as score_requests_router
 
     app.include_router(health_router)
     app.include_router(auth_router)
@@ -164,17 +166,18 @@ def create_app() -> FastAPI:
     app.include_router(score_requests_router)
 
     from app.routers.bureau_lookup import router as bureau_lookup_router
+
     app.include_router(bureau_lookup_router)
 
     # ── New: Models, Rules, Monitoring ───────────────────────────────────
-    from app.routers.models import router as models_router
-    from app.routers.rules import router as rules_router
-    from app.routers.monitoring import monitoring_router
-    from app.routers.batch_scoring import router as batch_scoring_router
-    from app.routers.permissions import router as permissions_router
-    from app.routers.admin_api_logs import router as admin_api_logs_router
     from app.routers.admin_admins import router as admin_admins_router
+    from app.routers.admin_api_logs import router as admin_api_logs_router
     from app.routers.admin_score_requests import router as admin_score_requests_router
+    from app.routers.batch_scoring import router as batch_scoring_router
+    from app.routers.models import router as models_router
+    from app.routers.monitoring import monitoring_router
+    from app.routers.permissions import router as permissions_router
+    from app.routers.rules import router as rules_router
 
     app.include_router(models_router)
     app.include_router(rules_router)

@@ -13,9 +13,8 @@ import asyncio
 import copy
 import logging
 import uuid
-from typing import Annotated, Any
-
 from datetime import datetime, timedelta
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import case, func, literal, select
@@ -27,7 +26,6 @@ from app.core.pagination import PaginatedResponse
 from app.db import get_db
 from app.db.base import utcnow
 from app.dependencies import AuthContext, require_any_permission, require_permission
-from app.services.cross_org_access import resolve_org_filter
 from app.models.score_request import (
     DecisionType,
     LoanPerformance,
@@ -54,6 +52,7 @@ from app.schemas.score_request import (
     ScoreRequestResponse,
     ScoreRequestStatsResponse,
     ScoreRequestSummary,
+    ScoreTimestamps,
     ScoringResultResponse,
     StatsCurrent,
     StatsDecisionCounts,
@@ -61,12 +60,20 @@ from app.schemas.score_request import (
     StatsPrevious,
     StatsTrend,
 )
+from app.services.cross_org_access import resolve_org_filter
 from app.services.hard_stops import evaluate_hard_stops
 from app.storage.cache import get_redis_cache
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/score-requests", tags=["Scoring API"])
+
+
+def _scoring_result_response(result: ScoringResult | None) -> ScoringResultResponse | None:
+    """Convert a persisted result and its JSON model payloads to the API schema."""
+    if result is None:
+        return None
+    return ScoringResultResponse.model_validate(result)
 
 
 def _org_summary(score_req: ScoreRequest) -> OrganizationSummary | None:
@@ -95,7 +102,9 @@ def _extract_summaries(
     if applicant_data and isinstance(applicant_data, dict):
         applicant = ApplicantSummary(
             full_name=applicant_data.get("full_name"),
-            date_of_birth=str(applicant_data["date_of_birth"]) if applicant_data.get("date_of_birth") else None,
+            date_of_birth=str(applicant_data["date_of_birth"])
+            if applicant_data.get("date_of_birth")
+            else None,
             national_id_number=applicant_data.get("national_id_number"),
             phone=applicant_data.get("phone"),
             account_number=applicant_data.get("account_number"),
@@ -225,9 +234,7 @@ def _build_xds_payload(
         # Delinquency rating lives in its own top-level object
         del_rating = credit_summary.get("delinquency_rating")
         if del_rating is not None:
-            p45["highestDelinquencyRating"] = {
-                "highestDelinquencyRating": str(del_rating)
-            }
+            p45["highestDelinquencyRating"] = {"highestDelinquencyRating": str(del_rating)}
 
     # Ensure required keys exist (DE expects these even if "0")
     summary.setdefault("totalNumberofAccountsGHS", "0")
@@ -250,19 +257,21 @@ def _build_xds_payload(
         for acct in credit_accounts:
             if not isinstance(acct, dict):
                 continue
-            accts.append({
-                "subscriberName": acct.get("subscriber_name", ""),
-                "accountNo": acct.get("account_no", ""),
-                "dateAccountOpened": acct.get("date_opened", ""),
-                "indicatorDescription": acct.get("facility_type", ""),
-                "currency": acct.get("currency", "GHS"),
-                "openingBalanceAmt": str(acct.get("credit_limit") or "0"),
-                "currentBalanceAmt": str(acct.get("current_balance") or "0"),
-                "instalmentAmount": str(acct.get("instalment_amount") or "0"),
-                "amountOverdue": str(acct.get("arrear_amount") or "0"),
-                "accountStatusCode": acct.get("status_code", ""),
-                "monthsInArrears": str(acct.get("months_in_arrears") or "0"),
-            })
+            accts.append(
+                {
+                    "subscriberName": acct.get("subscriber_name", ""),
+                    "accountNo": acct.get("account_no", ""),
+                    "dateAccountOpened": acct.get("date_opened", ""),
+                    "indicatorDescription": acct.get("facility_type", ""),
+                    "currency": acct.get("currency", "GHS"),
+                    "openingBalanceAmt": str(acct.get("credit_limit") or "0"),
+                    "currentBalanceAmt": str(acct.get("current_balance") or "0"),
+                    "instalmentAmount": str(acct.get("instalment_amount") or "0"),
+                    "amountOverdue": str(acct.get("arrear_amount") or "0"),
+                    "accountStatusCode": acct.get("status_code", ""),
+                    "monthsInArrears": str(acct.get("months_in_arrears") or "0"),
+                }
+            )
         p45["creditAgreementSummary"] = accts
     elif not p45.get("creditAgreementSummary") and financial_profile:
         # Fallback: build from financial_profile.existing_loans (NO_RECORD)
@@ -274,18 +283,20 @@ def _build_xds_payload(
             status = "A"
             if loan.get("status") == "paid_off":
                 status = "C"
-            accts.append({
-                "subscriberName": loan.get("lender_name", ""),
-                "accountNo": "",
-                "indicatorDescription": loan.get("loan_type", "Personal cash loan"),
-                "openingBalanceAmt": str(loan.get("original_amount", "0")),
-                "currency": "GHS",
-                "currentBalanceAmt": str(loan.get("outstanding_balance", "0")),
-                "instalmentAmount": str(loan.get("monthly_payment", "0")),
-                "amountOverdue": "0.00",
-                "accountStatusCode": status,
-                "monthsInArrears": str((loan.get("days_past_due") or 0) // 30),
-            })
+            accts.append(
+                {
+                    "subscriberName": loan.get("lender_name", ""),
+                    "accountNo": "",
+                    "indicatorDescription": loan.get("loan_type", "Personal cash loan"),
+                    "openingBalanceAmt": str(loan.get("original_amount", "0")),
+                    "currency": "GHS",
+                    "currentBalanceAmt": str(loan.get("outstanding_balance", "0")),
+                    "instalmentAmount": str(loan.get("monthly_payment", "0")),
+                    "amountOverdue": "0.00",
+                    "accountStatusCode": status,
+                    "monthsInArrears": str((loan.get("days_past_due") or 0) // 30),
+                }
+            )
         p45["creditAgreementSummary"] = accts
 
     # ── Ensure remaining P45 structures exist ───────────────────────────
@@ -308,6 +319,171 @@ def _build_xds_payload(
         "product_45": p45,
         "product_49": p49 or None,
     }
+
+
+async def _write_simulated_score(
+    db: AsyncSession,
+    auth: AuthContext,
+    body: CreateScoreRequestInput,
+    tracking_id: str,
+    payload_dict: dict[str, Any],
+    idempotency_key: str | None,
+    outcome: dict[str, Any],
+) -> ScoreRequestResponse:
+    """Persist a deterministic scoring result for a demo record and return it.
+
+    Used only when ``demo_simulation_mode`` is on and the consumer id matches
+    one of the five demo records. Mirrors the synchronous hard-stop path: write
+    a COMPLETED ScoreRequest + ScoringResult + DecisionMetric, no DE/AI call.
+    """
+    import asyncio as _asyncio
+    import secrets as _secrets
+    from datetime import timedelta
+
+    from app.config import get_settings as _gs
+    from app.models.decision_metric import DecisionMetric
+    from app.models.scoring_result import ScoringDecision, ScoringResult
+
+    # Feel like a real multi-model scoring pass rather than an instant answer.
+    _delay = max(
+        0.0,
+        _gs().demo_scoring_delay_seconds + _secrets.SystemRandom().uniform(-0.6, 1.2),
+    )
+    if _delay:
+        await _asyncio.sleep(_delay)
+
+    decision = outcome["decision"]
+    now = utcnow()
+
+    # Applicant age from DOB (for compliance fields)
+    dob = body.applicant.date_of_birth
+    age = now.year - dob.year - ((now.month, now.day) < (dob.month, dob.day))
+
+    approved = decision in ("APPROVE", "CONDITIONAL_APPROVE")
+    requested = float(body.loan_request.amount or 0)
+    rec_amount = outcome.get("recommended_amount_ghs")
+    if rec_amount is None and approved:
+        rec_amount = round(requested * (1.0 if decision == "APPROVE" else 0.6), 2)
+
+    credit_risk = {
+        "probability_of_default": outcome["probability_of_default"],
+        "pd_confidence": outcome.get("pd_confidence"),
+        "risk_tier": outcome["risk_tier"],
+        "shap_contributions": outcome.get("shap_contributions", []),
+        "decision_reason_codes": outcome.get("decision_reason_codes", []),
+        "model_version": "credit_risk_v2.0.0",
+    }
+    fraud_detection = {
+        "fraud_anomaly_score": outcome.get("fraud_anomaly_score"),
+        "fraud_risk_flag": outcome.get("fraud_risk_flag", "LOW"),
+        "model_version": "fraud_v1.0.0",
+    }
+    loan_amount = (
+        {
+            "recommended_amount_ghs": rec_amount,
+            "recommended_loan_tier": outcome.get("recommended_loan_tier"),
+            "model_version": "loan_v1.0.0",
+        }
+        if approved
+        else None
+    )
+    income_verification = {
+        "income_tier": outcome.get("income_tier"),
+        "income_tier_label": outcome.get("income_tier_label"),
+        "income_confidence": outcome.get("income_confidence"),
+        "model_version": "income_v1.0.0",
+    }
+    scoring_metadata = {
+        "credit_score": outcome["credit_score"],
+        "score_grade": outcome["score_grade"],
+        "data_quality_score": outcome.get("data_quality_score"),
+        "bureau_hit_status": "HIT",
+        "product_source": "45",
+        "applicant_age_at_application": str(age) if age is not None else None,
+        "decline_reasons": outcome.get("decline_reasons"),
+    }
+
+    source = RequestSource.API if auth.user_type == "api_key" else RequestSource.WEB_PORTAL
+    score_req = ScoreRequest(
+        tracking_id=tracking_id,
+        organization_id=auth.organization_id,
+        reference_id=body.reference_id,
+        status=ScoreRequestStatus.COMPLETED,
+        request_source=source,
+        request_payload=payload_dict,
+        idempotency_key=idempotency_key,
+        api_key_id=auth.api_key.id if auth.api_key else None,
+        created_by_user_id=auth.user_id,
+        score_value=outcome["credit_score"],
+        risk_category=outcome["risk_tier"],
+        confidence=outcome.get("pd_confidence"),
+        model_version="credit_risk_v2.0.0",
+        processing_time_ms=1200,
+        scored_at=now,
+        valid_until=now + timedelta(days=14),
+    )
+    db.add(score_req)
+    await db.flush()
+
+    scoring_result = ScoringResult(
+        request_id=tracking_id,
+        score_request_id=score_req.id,
+        scoring_timestamp=now,
+        decision=ScoringDecision(decision),
+        condition_applied=outcome.get("conditions", []),
+        credit_risk=credit_risk,
+        fraud_detection=fraud_detection,
+        loan_amount=loan_amount,
+        income_verification=income_verification,
+        scoring_metadata=scoring_metadata,
+        errors=None,
+    )
+    db.add(scoring_result)
+    await db.flush()
+
+    db.add(
+        DecisionMetric(
+            scoring_result_id=scoring_result.id,
+            decision=decision,
+            credit_score=outcome["credit_score"],
+            score_grade=outcome["score_grade"],
+            risk_tier=outcome["risk_tier"],
+            fraud_flag=outcome.get("fraud_risk_flag"),
+            loan_tier=outcome.get("recommended_loan_tier") if approved else None,
+            probability_of_default=outcome["probability_of_default"],
+            data_quality_score=outcome.get("data_quality_score"),
+            applicant_age=age,
+            has_explainability=bool(outcome.get("shap_contributions")),
+            timestamp=now,
+        )
+    )
+
+    resp = ScoreRequestResponse(
+        request_id=tracking_id,
+        reference_id=body.reference_id,
+        status=ScoreRequestStatus.COMPLETED.value,
+        applicant=ApplicantSummary(
+            full_name=body.applicant.full_name,
+            date_of_birth=str(body.applicant.date_of_birth),
+            national_id_number=body.applicant.national_id_number,
+            phone=body.applicant.phone,
+            account_number=body.applicant.account_number,
+        ),
+        loan_request=LoanRequestSummary(
+            amount=body.loan_request.amount,
+            tenure_months=body.loan_request.tenure_months,
+            purpose=body.loan_request.purpose,
+        ),
+        scoring_result=_scoring_result_response(scoring_result),
+        timestamps=ScoreTimestamps(requested_at=now, scored_at=now),
+    )
+    if idempotency_key:
+        try:
+            cache = get_redis_cache()
+            await cache.set_idempotency(idempotency_key, resp.model_dump(mode="json"))
+        except Exception as cache_error:
+            logger.debug("Could not cache simulated score response: %s", cache_error)
+    return resp
 
 
 @router.post(
@@ -355,12 +531,33 @@ async def create_score_request(
     # all 7 hard-stop rules. HS-03, HS-05, and HS-06 require fields that
     # only exist in the raw bureau report, not in the lightweight BureauData body.
     import json as _json
+
     from app.storage.cache import get_redis_cache as _get_redis_cache
 
     _raw_xds_data: dict = {}
-    consumer_id: str | None = (
-        body.bureau_data.consumer_id if body.bureau_data else None
-    )
+    consumer_id: str | None = body.bureau_data.consumer_id if body.bureau_data else None
+
+    # ── Demo simulation: deterministic result for the five demo records ──
+    from app.config import get_settings as _gs
+
+    if _gs().demo_simulation_mode and consumer_id:
+        from app.demo.simulation_records import get_outcome_by_consumer_id
+
+        _sim_outcome = get_outcome_by_consumer_id(consumer_id)
+        if _sim_outcome is not None:
+            logger.info(
+                "[scoring] SIMULATION result for %s → %s", tracking_id, _sim_outcome["decision"]
+            )
+            return await _write_simulated_score(
+                db,
+                auth,
+                body,
+                tracking_id,
+                payload_dict,
+                idempotency_key,
+                _sim_outcome,
+            )
+
     if consumer_id:
         try:
             _cache = _get_redis_cache()
@@ -374,11 +571,7 @@ async def create_score_request(
     # expired, we cannot score — the DE needs the raw report.  Reject
     # immediately with a clear error instead of sending an empty payload
     # to the DE (which would produce a mysterious DECLINE with null data).
-    if (
-        not _raw_xds_data
-        and body.bureau_data
-        and body.bureau_data.bureau_hit_status == "HIT"
-    ):
+    if not _raw_xds_data and body.bureau_data and body.bureau_data.bureau_hit_status == "HIT":
         raise HTTPException(
             status_code=409,
             detail=(
@@ -393,6 +586,7 @@ async def create_score_request(
     features = payload_dict.get("bureau_data", {}).get("features")
     if features and _raw_xds_data:
         from app.services.xds_reverse_mapper import apply_feature_overrides
+
         _raw_xds_data = apply_feature_overrides(_raw_xds_data, features)
 
     # ── Compute applicant age from reverse-mapped XDS data (primary) ─────
@@ -410,12 +604,14 @@ async def create_score_request(
             _bd_str = _p45_pd.get("birthDate", "")
             if _bd_str:
                 from datetime import datetime as _dt
+
                 for _fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
                     try:
                         _bd = _dt.strptime(str(_bd_str).strip()[:10], _fmt).date()
                         today = date.today()
                         applicant_age = (
-                            today.year - _bd.year
+                            today.year
+                            - _bd.year
                             - ((today.month, today.day) < (_bd.month, _bd.day))
                         )
                         break
@@ -426,9 +622,7 @@ async def create_score_request(
     if applicant_age is None and body.applicant.date_of_birth:
         today = date.today()
         dob = body.applicant.date_of_birth
-        applicant_age = (
-            today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        )
+        applicant_age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
 
     # Build the bureau_data dict for hard-stop evaluation.
     # Start with whatever the client submitted (credit_summary from the
@@ -453,9 +647,7 @@ async def create_score_request(
         # ── Delinquency rating (HS-06) ───────────────────────────────────
         # Prefer P45, fall back to P49
         _del_obj = (
-            _p45.get("highestDelinquencyRating")
-            or _p49.get("highestDelinquencyRating")
-            or {}
+            _p45.get("highestDelinquencyRating") or _p49.get("highestDelinquencyRating") or {}
         )
         if isinstance(_del_obj, list) and _del_obj:
             _del_obj = _del_obj[0]
@@ -499,7 +691,8 @@ async def create_score_request(
         # Check BOTH Product 45 (creditAgreementSummary[]) and
         # Product 49 (detailedFacilityInfo[]) — same field names, different keys.
         # XDS dates are dd/mm/yyyy (e.g. "24/03/2026").
-        from datetime import datetime as _dt, timedelta
+        from datetime import datetime as _dt
+        from datetime import timedelta
 
         _cutoff = date.today() - timedelta(days=36 * 30)
 
@@ -585,7 +778,10 @@ async def create_score_request(
                 bureau_data["has_written_off_within_36m"] = True
 
         # HS-06: Delinquency rating — raw 0–4 from XDS (4 = Very Poor)
-        if "delinquency_rating" not in bureau_data and _feats.highest_delinquency_rating is not None:
+        if (
+            "delinquency_rating" not in bureau_data
+            and _feats.highest_delinquency_rating is not None
+        ):
             bureau_data["delinquency_rating"] = _feats.highest_delinquency_rating
 
         # HS-03: Identity confidence fallback when XDS cache wasn't available
@@ -611,9 +807,7 @@ async def create_score_request(
             reference_id=body.reference_id,
             status=ScoreRequestStatus.COMPLETED,
             request_source=(
-                RequestSource.API
-                if auth.user_type == "api_key"
-                else RequestSource.WEB_PORTAL
+                RequestSource.API if auth.user_type == "api_key" else RequestSource.WEB_PORTAL
             ),
             request_payload=payload_dict,
             idempotency_key=idempotency_key,
@@ -665,9 +859,7 @@ async def create_score_request(
         )
 
     # ── Normal flow: Save as PROCESSING and publish to DE ────────────────
-    source = (
-        RequestSource.API if auth.user_type == "api_key" else RequestSource.WEB_PORTAL
-    )
+    source = RequestSource.API if auth.user_type == "api_key" else RequestSource.WEB_PORTAL
 
     score_req = ScoreRequest(
         tracking_id=tracking_id,
@@ -688,10 +880,8 @@ async def create_score_request(
     # so _raw_xds_data is already patched with frontend feature overrides.
 
     try:
-        from app.core.events import get_event_publisher
         from app.config import get_settings
 
-        publisher = get_event_publisher()
         settings = get_settings()
 
         de_payload = {
@@ -700,11 +890,14 @@ async def create_score_request(
             "source_system": "xds",
             "models_to_run": ["all"],
             "xds_payload": {
-                "consumer_full_report_45": _raw_xds_data.get("product_45") if _raw_xds_data else None,
-                "consumer_mobile_report_49": _raw_xds_data.get("product_49") if _raw_xds_data else None
-            }
+                "consumer_full_report_45": _raw_xds_data.get("product_45")
+                if _raw_xds_data
+                else None,
+                "consumer_mobile_report_49": _raw_xds_data.get("product_49")
+                if _raw_xds_data
+                else None,
+            },
         }
-
 
         # Publish to the DE Azure Function to trigger inferencing
         async def _publish_to_de_inference(payload: dict):
@@ -717,15 +910,20 @@ async def create_score_request(
                 async with httpx.AsyncClient(timeout=30.0) as client:
                     resp = await client.post(url, json=payload)
                     if resp.status_code in (200, 201, 202):
-                        logger.info(f"[scoring] Published score request {tracking_id} to DE inference function")
+                        logger.info(
+                            "[scoring] Published score request %s to DE inference function",
+                            tracking_id,
+                        )
                     else:
-                        logger.error(f"[scoring] DE inference call failed ({resp.status_code}): {resp.text}")
+                        logger.error(
+                            f"[scoring] DE inference call failed ({resp.status_code}): {resp.text}"
+                        )
             except Exception as inner_e:
                 logger.error(f"[scoring] DE inference call threw exception: {inner_e}")
 
         # Fire and forget
         asyncio.create_task(_publish_to_de_inference(de_payload))
-        
+
     except Exception as e:
         logger.error(f"[scoring] Failed to trigger DE inference logic: {e}")
         score_req.status = ScoreRequestStatus.FAILED
@@ -751,11 +949,7 @@ async def create_score_request(
     # In the success path scoring_result doesn't exist yet (DE runs async),
     # so avoid triggering a lazy load which would fail in async context.
     # Only the error path (line 657) wires the relationship explicitly.
-    _sr = (
-        score_req.scoring_result
-        if "scoring_result" in score_req.__dict__
-        else None
-    )
+    _sr = score_req.scoring_result if "scoring_result" in score_req.__dict__ else None
 
     # The auth context already carries the caller's org for non-admin
     # callers (admins don't create requests today, so this is always
@@ -785,16 +979,14 @@ async def create_score_request(
             tenure_months=body.loan_request.tenure_months,
             purpose=body.loan_request.purpose,
         ),
-        scoring_result=_sr,
-        timestamps={"requested_at": score_req.created_at.isoformat()},
+        scoring_result=_scoring_result_response(_sr),
+        timestamps=ScoreTimestamps(requested_at=score_req.created_at),
     )
 
     # Cache idempotency response
     if idempotency_key:
         cache = get_redis_cache()
-        await cache.set_idempotency(
-            idempotency_key, response.model_dump(mode="json")
-        )
+        await cache.set_idempotency(idempotency_key, response.model_dump(mode="json"))
 
     return response
 
@@ -837,14 +1029,13 @@ async def get_score_request_stats(
         * ``needs_attention`` — referral / in-flight / failed counts.
     """
     org_filter = await resolve_org_filter(
-        db, auth,
+        db,
+        auth,
         requested_org_id=organization_id,
         admin_permission="admin.score_requests.read",
         resource_type="score_requests",
     )
-    return await _compute_score_request_stats(
-        db, org_filter.organization_id, period
-    )
+    return await _compute_score_request_stats(db, org_filter.organization_id, period)
 
 
 @router.get("/{request_id}", response_model=ScoreRequestResponse)
@@ -862,9 +1053,15 @@ async def get_score_request(
     Platform admins with ``admin.score_requests.read`` may fetch any
     request regardless of org — those reads are recorded in ``audit_logs``.
     """
-    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result),
-        selectinload(ScoreRequest.organization),).where(
-        ScoreRequest.tracking_id == request_id,
+    query = (
+        select(ScoreRequest)
+        .options(
+            selectinload(ScoreRequest.scoring_result),
+            selectinload(ScoreRequest.organization),
+        )
+        .where(
+            ScoreRequest.tracking_id == request_id,
+        )
     )
     # Restrict by org for non-admin callers; admins (with the perm) see any row.
     if auth.user_type != "admin":
@@ -879,7 +1076,8 @@ async def get_score_request(
     # tracking_id is privileged and should leave a trail.
     if auth.user_type == "admin":
         await _audit_admin_score_read(
-            db, auth,
+            db,
+            auth,
             organization_id=score_req.organization_id,
             request_id=request_id,
         )
@@ -893,11 +1091,11 @@ async def get_score_request(
         organization=_org_summary(score_req),
         applicant=applicant,
         loan_request=loan,
-        scoring_result=score_req.scoring_result,
-        timestamps={
-            "requested_at": score_req.created_at.isoformat(),
-            "scored_at": score_req.scored_at.isoformat() if score_req.scored_at else None,
-        },
+        scoring_result=_scoring_result_response(score_req.scoring_result),
+        timestamps=ScoreTimestamps(
+            requested_at=score_req.created_at,
+            scored_at=score_req.scored_at,
+        ),
     )
 
 
@@ -921,9 +1119,7 @@ async def get_scoring_result(
     """
     sr_query = select(ScoreRequest).where(ScoreRequest.tracking_id == request_id)
     if auth.user_type != "admin":
-        sr_query = sr_query.where(
-            ScoreRequest.organization_id == auth.organization_id
-        )
+        sr_query = sr_query.where(ScoreRequest.organization_id == auth.organization_id)
 
     score_req = (await db.execute(sr_query)).scalar_one_or_none()
     if not score_req:
@@ -931,49 +1127,24 @@ async def get_scoring_result(
 
     if auth.user_type == "admin":
         await _audit_admin_score_read(
-            db, auth,
+            db,
+            auth,
             organization_id=score_req.organization_id,
             request_id=request_id,
         )
 
     # Look up the scoring result
-    result = await db.execute(
-        select(ScoringResult).where(ScoringResult.request_id == request_id)
-    )
+    result = await db.execute(select(ScoringResult).where(ScoringResult.request_id == request_id))
     scoring_result = result.scalar_one_or_none()
     if not scoring_result:
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Scoring result not yet available. "
-                f"Current status: {score_req.status.value}"
-            ),
+            detail=(f"Scoring result not yet available. Current status: {score_req.status.value}"),
         )
 
-    # Surface hard-stop decline details if present in scoring_metadata
-    decline_reasons = None
-    triggered_rules = None
-    meta = scoring_result.scoring_metadata
-    if isinstance(meta, dict) and meta.get("hard_stop"):
-        decline_reasons = meta.get("decline_reasons")
-        triggered_rules = meta.get("triggered_rules")
-
-    return ScoringResultResponse(
-        request_id=scoring_result.request_id,
-        decision=scoring_result.decision.value,
-        condition_applied=scoring_result.condition_applied,
-        scoring_timestamp=scoring_result.scoring_timestamp,
-        decline_reasons=decline_reasons,
-        triggered_rules=triggered_rules,
-        credit_risk=scoring_result.credit_risk,
-        fraud_detection=scoring_result.fraud_detection,
-        loan_amount=scoring_result.loan_amount,
-        income_verification=scoring_result.income_verification,
-        scoring_metadata=scoring_result.scoring_metadata,
-        errors=scoring_result.errors,
-    )
+    return ScoringResultResponse.model_validate(scoring_result)
 
 
 @router.post(
@@ -1002,16 +1173,12 @@ async def override_decision(
     if not score_req:
         raise NotFoundError("Score request", request_id)
 
-    result = await db.execute(
-        select(ScoringResult).where(ScoringResult.request_id == request_id)
-    )
+    result = await db.execute(select(ScoringResult).where(ScoringResult.request_id == request_id))
     scoring_result = result.scalar_one_or_none()
     if not scoring_result:
         from fastapi import HTTPException
 
-        raise HTTPException(
-            status_code=400, detail="Scoring result not available for override"
-        )
+        raise HTTPException(status_code=400, detail="Scoring result not available for override")
 
     from app.models.scoring_result import ScoringDecision
 
@@ -1041,9 +1208,7 @@ async def override_decision(
         decision=DecisionType(body.decision),
         approved_amount=body.approved_amount,
         approved_tenure=body.approved_tenure_months,
-        decision_notes=(
-            f"Manual override from {previous_decision}: {body.override_reason}"
-        ),
+        decision_notes=(f"Manual override from {previous_decision}: {body.override_reason}"),
         decided_by_user_id=auth.user_id,
         decided_at=utcnow(),
     )
@@ -1105,20 +1270,21 @@ async def list_score_requests(
         * ``organization_id`` — admin-only narrow / cross-org wide.
     """
     org_filter = await resolve_org_filter(
-        db, auth,
+        db,
+        auth,
         requested_org_id=organization_id,
         admin_permission="admin.score_requests.read",
         resource_type="score_requests",
     )
 
-    query = select(ScoreRequest).options(selectinload(ScoreRequest.scoring_result),
-        selectinload(ScoreRequest.organization),)
+    query = select(ScoreRequest).options(
+        selectinload(ScoreRequest.scoring_result),
+        selectinload(ScoreRequest.organization),
+    )
     count_query = select(func.count(ScoreRequest.id))
     if org_filter.organization_id is not None:
         query = query.where(ScoreRequest.organization_id == org_filter.organization_id)
-        count_query = count_query.where(
-            ScoreRequest.organization_id == org_filter.organization_id
-        )
+        count_query = count_query.where(ScoreRequest.organization_id == org_filter.organization_id)
 
     if status_filter:
         try:
@@ -1150,20 +1316,16 @@ async def list_score_requests(
                     f"Allowed: {', '.join(d.value for d in ScoringDecision)}"
                 ),
             )
-        query = (
-            query.join(ScoringResult, ScoringResult.score_request_id == ScoreRequest.id)
-            .where(ScoringResult.decision.in_(decision_enums))
+        query = query.join(ScoringResult, ScoringResult.score_request_id == ScoreRequest.id).where(
+            ScoringResult.decision.in_(decision_enums)
         )
-        count_query = (
-            count_query.join(ScoringResult, ScoringResult.score_request_id == ScoreRequest.id)
-            .where(ScoringResult.decision.in_(decision_enums))
-        )
+        count_query = count_query.join(
+            ScoringResult, ScoringResult.score_request_id == ScoreRequest.id
+        ).where(ScoringResult.decision.in_(decision_enums))
 
     total = (await db.execute(count_query)).scalar_one()
     result = await db.execute(
-        query.order_by(ScoreRequest.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        query.order_by(ScoreRequest.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     )
     requests = result.scalars().all()
 
@@ -1187,13 +1349,11 @@ async def list_score_requests(
                 request_source=r.request_source.value,
                 created_at=r.created_at,
                 scored_at=r.scored_at,
-                scoring_result=r.scoring_result,
+                scoring_result=_scoring_result_response(r.scoring_result),
             )
         )
 
-    return PaginatedResponse.create(
-        items=items, total=total, page=page, per_page=per_page
-    )
+    return PaginatedResponse.create(items=items, total=total, page=page, per_page=per_page)
 
 
 @router.post("/{request_id}/outcome", response_model=OutcomeResponse)
@@ -1279,16 +1439,18 @@ async def _audit_admin_score_read(
     """
     from app.models.audit import AuditLog
 
-    db.add(AuditLog(
-        actor_type="admin",
-        actor_id=str(auth.user_id) if auth.user_id else None,
-        actor_email=auth.user_email,
-        organization_id=str(organization_id) if organization_id else None,
-        action="score_requests.read_cross_org",
-        resource_type="score_requests",
-        resource_id=request_id,
-        description=f"Admin viewed score request {request_id}",
-    ))
+    db.add(
+        AuditLog(
+            actor_type="admin",
+            actor_id=str(auth.user_id) if auth.user_id else None,
+            actor_email=auth.user_email,
+            organization_id=str(organization_id) if organization_id else None,
+            action="score_requests.read_cross_org",
+            resource_type="score_requests",
+            resource_id=request_id,
+            description=f"Admin viewed score request {request_id}",
+        )
+    )
 
 
 # ── Stats helpers ─────────────────────────────────────────────────────────────
@@ -1354,11 +1516,7 @@ async def _aggregate_window(
         base_filter.append(ScoreRequest.organization_id == organization_id)
 
     # total_requests
-    total = (
-        await db.execute(
-            select(func.count(ScoreRequest.id)).where(*base_filter)
-        )
-    ).scalar_one()
+    total = (await db.execute(select(func.count(ScoreRequest.id)).where(*base_filter))).scalar_one()
 
     # decided + decision_counts — one GROUP BY over the join.
     rows = (
@@ -1383,8 +1541,7 @@ async def _aggregate_window(
             select(
                 func.avg(score_expr),
                 func.percentile_cont(0.5).within_group(score_expr.asc()),
-            )
-            .where(*base_filter, score_expr.is_not(None))
+            ).where(*base_filter, score_expr.is_not(None))
         )
     ).first()
     avg_score = int(avg_row[0]) if avg_row and avg_row[0] is not None else None
@@ -1435,20 +1592,22 @@ async def _compute_score_request_stats(
     current_start, current_end, previous_start = _period_bounds(period, now=now)
 
     current_agg = await _aggregate_window(
-        db, organization_id=organization_id,
-        start=current_start, end=current_end,
+        db,
+        organization_id=organization_id,
+        start=current_start,
+        end=current_end,
     )
     previous_agg = await _aggregate_window(
-        db, organization_id=organization_id,
-        start=previous_start, end=current_start,
+        db,
+        organization_id=organization_id,
+        start=previous_start,
+        end=current_start,
     )
 
     # ── decision counts ───────────────────────────────────────────────────
     decision_counts = StatsDecisionCounts(
         APPROVE=current_agg["by_decision"].get(ScoringDecision.APPROVE, 0),
-        CONDITIONAL_APPROVE=current_agg["by_decision"].get(
-            ScoringDecision.CONDITIONAL_APPROVE, 0
-        ),
+        CONDITIONAL_APPROVE=current_agg["by_decision"].get(ScoringDecision.CONDITIONAL_APPROVE, 0),
         DECLINE=current_agg["by_decision"].get(ScoringDecision.DECLINE, 0),
         REFER=current_agg["by_decision"].get(ScoringDecision.REFER, 0),
         ERROR=current_agg["by_decision"].get(ScoringDecision.ERROR, 0),
@@ -1469,8 +1628,7 @@ async def _compute_score_request_stats(
         total_delta_pct: float | None = None
     else:
         total_delta_pct = round(
-            (current_agg["total"] - previous_agg["total"])
-            * 100 / previous_agg["total"],
+            (current_agg["total"] - previous_agg["total"]) * 100 / previous_agg["total"],
             1,
         )
 
@@ -1491,10 +1649,12 @@ async def _compute_score_request_stats(
     referred = current_agg["by_decision"].get(ScoringDecision.REFER, 0)
 
     in_flight_filter = [
-        ScoreRequest.status.in_([
-            ScoreRequestStatus.PENDING,
-            ScoreRequestStatus.PROCESSING,
-        ]),
+        ScoreRequest.status.in_(
+            [
+                ScoreRequestStatus.PENDING,
+                ScoreRequestStatus.PROCESSING,
+            ]
+        ),
     ]
     failed_filter = [
         ScoreRequest.status == ScoreRequestStatus.FAILED,

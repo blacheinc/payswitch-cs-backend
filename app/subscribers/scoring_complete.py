@@ -9,7 +9,7 @@ Subscription: backend-sub
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -40,9 +40,7 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
         logger.error("[scoring-complete] Missing request_id in message")
         return
     if not decision_value:
-        logger.error(
-            f"[scoring-complete] Missing decision for request {request_id}"
-        )
+        logger.error(f"[scoring-complete] Missing decision for request {request_id}")
         return
 
     # Validate decision
@@ -50,25 +48,19 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
         decision = ScoringDecision(decision_value)
     except ValueError:
         logger.error(
-            f"[scoring-complete] Invalid decision '{decision_value}' "
-            f"for request {request_id}"
+            f"[scoring-complete] Invalid decision '{decision_value}' for request {request_id}"
         )
         return
 
-    logger.info(
-        f"[scoring-complete] Processing request={request_id} "
-        f"decision={decision_value}"
-    )
+    logger.info(f"[scoring-complete] Processing request={request_id} decision={decision_value}")
 
     # Parse scoring timestamp
     scoring_ts = None
     if message.get("scoring_timestamp"):
         try:
-            scoring_ts = datetime.fromisoformat(
-                message["scoring_timestamp"].replace("Z", "+00:00")
-            )
+            scoring_ts = datetime.fromisoformat(message["scoring_timestamp"].replace("Z", "+00:00"))
         except (ValueError, TypeError):
-            scoring_ts = datetime.now(timezone.utc)
+            scoring_ts = datetime.now(UTC)
 
     async with async_session_factory() as db:
         async with db.begin():
@@ -77,9 +69,7 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                 select(ScoringResult).where(ScoringResult.request_id == request_id)
             )
             if existing.scalar_one_or_none():
-                logger.info(
-                    f"[scoring-complete] Already processed request {request_id}, skipping"
-                )
+                logger.info(f"[scoring-complete] Already processed request {request_id}, skipping")
                 return
 
             # Find the ScoreRequest
@@ -123,12 +113,10 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                     #     )
                     score_req.risk_category = credit_risk.get("risk_tier")
                     score_req.model_version = credit_risk.get("model_version")
-                
+
                 score_req.score_value = message.get("scoring_metadata", {}).get("credit_score")
 
-                score_req.confidence = (
-                    credit_risk.get("pd_confidence") if credit_risk else None
-                )
+                score_req.confidence = credit_risk.get("pd_confidence") if credit_risk else None
                 score_req.scored_at = scoring_ts or utcnow()
                 # We no longer dump the raw JSON here because the API endpoints
                 # now natively join the detailed scoring_results table row.
@@ -137,13 +125,9 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                 try:
                     await _deliver_webhook(score_req, message)
                 except Exception as e:
-                    logger.warning(
-                        f"[scoring-complete] Webhook delivery failed: {e}"
-                    )
+                    logger.warning(f"[scoring-complete] Webhook delivery failed: {e}")
             else:
-                logger.warning(
-                    f"[scoring-complete] ScoreRequest not found for {request_id}"
-                )
+                logger.warning(f"[scoring-complete] ScoreRequest not found for {request_id}")
 
             # ── Inline DecisionMetric for real-time dashboard data ────────
             try:
@@ -163,9 +147,7 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                     risk_tier=credit_risk_data.get("risk_tier"),
                     fraud_flag=fraud_data.get("fraud_risk_flag"),
                     loan_tier=loan_data.get("recommended_loan_tier"),
-                    probability_of_default=credit_risk_data.get(
-                        "probability_of_default"
-                    ),
+                    probability_of_default=credit_risk_data.get("probability_of_default"),
                     data_quality_score=meta.get("data_quality_score"),
                     applicant_age=meta.get("applicant_age_at_application"),
                     has_explainability=bool(shap and len(shap) > 0),
@@ -173,21 +155,18 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
                 )
                 db.add(decision_metric)
             except Exception as dm_err:
-                logger.warning(
-                    f"[scoring-complete] Failed to create DecisionMetric: {dm_err}"
-                )
+                logger.warning(f"[scoring-complete] Failed to create DecisionMetric: {dm_err}")
 
     logger.info(
-        f"[scoring-complete] Saved ScoringResult for {request_id} "
-        f"(decision={decision_value})"
+        f"[scoring-complete] Saved ScoringResult for {request_id} (decision={decision_value})"
     )
 
     # ── Inline metrics: drift + alert evaluation ──────────────────────────
     # Runs after the main transaction so failures never affect scoring persistence.
     try:
         from app.db import async_session_factory as _sf
+        from app.jobs.alert_evaluator import evaluate_model_alerts, evaluate_risk_alerts
         from app.jobs.drift_calculator import compute_feature_drift, compute_score_psi
-        from app.jobs.alert_evaluator import evaluate_risk_alerts, evaluate_model_alerts
 
         async with _sf() as metrics_db:
             async with metrics_db.begin():
@@ -199,9 +178,7 @@ async def handle_scoring_complete(message: dict[str, Any]) -> None:
         logger.warning("[scoring-complete] Inline metrics evaluation failed: %s", _me)
 
 
-async def _deliver_webhook(
-    score_req: ScoreRequest, scoring_message: dict[str, Any]
-) -> None:
+async def _deliver_webhook(score_req: ScoreRequest, scoring_message: dict[str, Any]) -> None:
     """Trigger webhook delivery for the organization if configured."""
     if not score_req.callback_url:
         return

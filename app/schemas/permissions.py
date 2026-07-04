@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from app.schemas.common import BaseSchema
 
-
 # ── Permission schemas ────────────────────────────────────────────────────────
 
 
@@ -32,6 +31,7 @@ class PermissionListResponse(BaseModel):
 
 class RolePermissionItem(BaseModel):
     """Slim permission summary embedded inside a RoleResponse."""
+
     id: UUID
     code: str
     name: str
@@ -82,5 +82,6 @@ class AssignRoleRequest(BaseModel):
 
 class RoleActionResponse(BaseModel):
     """Returned by create and update role endpoints — message + full role data."""
+
     message: str
     role: RoleResponse

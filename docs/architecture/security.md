@@ -1,6 +1,6 @@
 # Security
 
-This document describes every security mechanism the backend enforces and the client operator's responsibilities for sustaining them. Scope is the FastAPI service and its dependencies — end-to-end HTTPS termination, WAF rules, and client-side concerns are out of scope and expected to be handled by the caller's edge infrastructure.
+This document describes the security mechanisms enforced by the backend and the complementary platform controls used to sustain them. It covers the FastAPI service and its direct dependencies; ingress TLS, WAF policy and browser controls integrate at the platform and frontend layers.
 
 ---
 
@@ -18,7 +18,7 @@ Three principal types share a single `AuthContext`:
 
 - **Algorithm**: HS256. Signing key is `settings.jwt_secret_key`, minimum 32 chars, sourced from Key Vault in production.
 - **Access token lifetime**: 15 minutes (`access_token_expire_minutes`). Refresh token: 7 days.
-- **Claims**: `sub` (user UUID), `type` (`access` / `refresh`), `user_type` (`admin` / `org_user`), `org_id` (org users only), `exp`, `iat`. The legacy `role` claim on admin JWTs is retained for FE back-compat but is informational; RBAC is not consulted from the JWT.
+- **Claims**: `sub` (user UUID), `type` (`access` / `refresh`), `user_type` (`admin` / `org_user`), `org_id` (org users only), `exp`, `iat`. The compatibility `role` claim supports existing clients; authoritative access is resolved from current database-backed RBAC assignments.
 - **Refresh flow**: `POST /auth/refresh` with the refresh JWT. Tokens are not stored server-side — revocation is logout-on-device.
 - **Password hashing**: bcrypt via `passlib`. 12 rounds.
 - **2FA (admins only)**: TOTP with `pyotp`, per-admin `totp_secret`, verified at the login endpoint when `totp_enabled=True`.
@@ -79,7 +79,7 @@ See [`app/config/keyvault_source.py`](../../app/config/keyvault_source.py) and [
 - **Naming convention**: Settings field `jwt_secret_key` ↔ KV secret `jwt-secret-key` (snake → kebab).
 - **Allowlist**: only fields in `SECRET_FIELDS` are ever fetched from KV. URLs and feature flags are env-only.
 - **Cache**: per-process SDK client cache + per-request secret cache; first-boot adds ~1–3 s for 12 secrets.
-- **Fail-open fallback**: KV errors are logged and the source returns `None` — env vars take over. A misconfigured KV does NOT bring the app down.
+- **Availability-preserving fallback**: Key Vault retrieval errors are logged and configured environment values remain available as the alternate approved secret source.
 - **Service principal rotation**: `az ad sp credential reset --id <appId>` then update `AZURE_CLIENT_SECRET` on the Container App. The SDK does not cache credentials across processes, so a restart picks up the new secret.
 
 ---
@@ -102,9 +102,9 @@ Postgres + Storage force TLS 1.2 minimum. Redis forces minimum TLS 1.2 + disable
 
 ## 5. Network posture
 
-Initial deploy is **public-endpoint-with-credentials** — every Azure service is reachable on its public FQDN, gated by its connection string / access key. This is a deliberate v1 tradeoff that keeps the Bicep self-contained and doesn't assume a client VNet design.
+The supplied baseline uses authenticated Azure public endpoints so it can be deployed consistently into a new subscription. Every data-plane connection requires its dedicated connection string or access key and TLS.
 
-Hardening paths once the client has a preferred topology:
+The following network controls can be selected during environment integration to match the client's established topology:
 
 1. **Postgres firewall**: the Bicep opens `AllowAllAzureServices` on create. After the first successful boot, record the Container App's outbound IP ranges and tighten via `firewallStartIp` / `firewallEndIp` (or switch to VNet integration).
 2. **Redis private endpoint**: Basic SKU doesn't support private endpoints; upgrade to Standard or Premium if this matters.
@@ -132,7 +132,6 @@ Redis-backed sliding window, keyed by `organization_id`, enforced before the per
 |---|---|---|
 | `rate_limit_per_minute` | 100 | Per org |
 | `rate_limit_per_day` | 50_000 | Per org |
-| `rate_limit_burst` | 200 | Per org |
 
 429 responses include a `Retry-After` header.
 
@@ -150,9 +149,9 @@ All request bodies are Pydantic models with explicit field validators. Fields th
 
 ---
 
-## 10. Responsible-disclosure contract
+## 10. Security operations integration
 
-The backend does not implement its own vulnerability-reporting workflow. The client's security org should publish a `security.txt` alongside the dashboard hostname pointing at their intake channel. Standard hardening tasks that belong to the operator, not the code:
+The application controls integrate with the client's security operations process. Recommended production controls are:
 
 - Azure Defender for Cloud + Defender for Containers enabled on the subscription.
 - Log Analytics alert rules on `ApiLog` 5xx spikes and repeated `AUTHENTICATION_ERROR`.

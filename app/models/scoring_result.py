@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from app.models.score_request import ScoreRequest
 
 
-class ScoringDecision(str, enum.Enum):
+class ScoringDecision(enum.StrEnum):
     """Possible decisions from the AI scoring pipeline."""
 
     APPROVE = "APPROVE"
@@ -38,9 +38,7 @@ class ScoringResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "scoring_results"
 
     # Links to ScoreRequest via tracking_id / request_id
-    request_id: Mapped[str] = mapped_column(
-        String(50), unique=True, nullable=False, index=True
-    )
+    request_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     score_request_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("score_requests.id"), index=True
     )
@@ -67,9 +65,7 @@ class ScoringResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     credit_risk: Mapped[dict | None] = mapped_column(JSONB)
     fraud_detection: Mapped[dict | None] = mapped_column(JSONB)
     loan_amount: Mapped[dict | None] = mapped_column(JSONB)  # null when Phase 2 skipped
-    income_verification: Mapped[dict | None] = mapped_column(
-        JSONB
-    )  # null when Phase 2 skipped
+    income_verification: Mapped[dict | None] = mapped_column(JSONB)  # null when Phase 2 skipped
 
     # Metadata pass-through from DE
     scoring_metadata: Mapped[dict | None] = mapped_column(JSONB)
@@ -78,12 +74,10 @@ class ScoringResult(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     errors: Mapped[list | None] = mapped_column(JSONB)
 
     # Relationships
-    score_request: Mapped["ScoreRequest | None"] = relationship(
+    score_request: Mapped[ScoreRequest | None] = relationship(
         back_populates="scoring_result", foreign_keys=[score_request_id]
     )
-    bulk_job: Mapped["BulkScoringJob | None"] = relationship(
-        foreign_keys=[bulk_job_id]
-    )
+    bulk_job: Mapped[BulkScoringJob | None] = relationship(foreign_keys=[bulk_job_id])
 
     def __repr__(self) -> str:
         return f"<ScoringResult {self.request_id} ({self.decision.value})>"

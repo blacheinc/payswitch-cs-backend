@@ -14,15 +14,15 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.pagination import PaginatedResponse
 from app.core.security import (
     generate_api_key,
+    generate_email_verification_token,
     generate_temp_password,
     generate_webhook_secret,
     hash_password,
-    generate_email_verification_token,
 )
 from app.db import get_db
 from app.dependencies import AuthContext, require_permission
 from app.models.api_key import ApiKey, ApiKeyEnvironment
-from app.models.organization import IndustryType, OrgStatus, Organization
+from app.models.organization import IndustryType, Organization, OrgStatus
 from app.models.permission import OrgUserRole, Role
 from app.models.user import OrgRoleLabel, OrgUser, OrgUserStatus
 from app.schemas.common import SuccessResponse
@@ -56,9 +56,7 @@ async def create_organization(
         select(Organization).where(Organization.short_name == body.short_name)
     )
     if existing.scalar_one_or_none():
-        raise ConflictError(
-            f"Organization with short_name '{body.short_name}' already exists"
-        )
+        raise ConflictError(f"Organization with short_name '{body.short_name}' already exists")
 
     # Check unique primary_contact_email
     if body.primary_contact_email:
@@ -69,7 +67,8 @@ async def create_organization(
         )
         if existing.scalar_one_or_none():
             raise ConflictError(
-                f"Organization with primary_contact_email '{body.primary_contact_email}' already exists"
+                "Organization with primary_contact_email "
+                f"'{body.primary_contact_email}' already exists"
             )
 
     org = Organization(
@@ -105,19 +104,15 @@ async def list_organizations(
         count_query = count_query.where(Organization.status == OrgStatus(status_filter))
     if search:
         query = query.where(
-            Organization.name.ilike(f"%{search}%")
-            | Organization.short_name.ilike(f"%{search}%")
+            Organization.name.ilike(f"%{search}%") | Organization.short_name.ilike(f"%{search}%")
         )
         count_query = count_query.where(
-            Organization.name.ilike(f"%{search}%")
-            | Organization.short_name.ilike(f"%{search}%")
+            Organization.name.ilike(f"%{search}%") | Organization.short_name.ilike(f"%{search}%")
         )
 
     total = (await db.execute(count_query)).scalar_one()
     result = await db.execute(
-        query.order_by(Organization.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        query.order_by(Organization.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     )
     orgs = result.scalars().all()
 
@@ -216,9 +211,7 @@ async def provision_organization(
     )
     admin_role = admin_role_result.scalar_one_or_none()
     if not admin_role:
-        raise ValidationError(
-            "System ADMIN role not found — ensure the permission seeder has run."
-        )
+        raise ValidationError("System ADMIN role not found — ensure the permission seeder has run.")
 
     # Check whether the primary contact email is already an org user
     existing_user_result = await db.execute(
@@ -289,9 +282,7 @@ async def provision_organization(
     # Assign the system ADMIN RBAC role so the user has full org-scoped permissions.
     # Re-use an existing assignment if the user was previously provisioned/removed.
     existing_rbac = (
-        await db.execute(
-            select(OrgUserRole).where(OrgUserRole.org_user_id == org_admin.id)
-        )
+        await db.execute(select(OrgUserRole).where(OrgUserRole.org_user_id == org_admin.id))
     ).scalar_one_or_none()
     if existing_rbac:
         existing_rbac.role_id = admin_role.id
@@ -384,9 +375,7 @@ async def list_org_users(
         raise NotFoundError("Organization", str(org_id))
 
     query = select(OrgUser).where(OrgUser.organization_id == org_id)
-    count_query = select(func.count(OrgUser.id)).where(
-        OrgUser.organization_id == org_id
-    )
+    count_query = select(func.count(OrgUser.id)).where(OrgUser.organization_id == org_id)
 
     if status_filter:
         query = query.where(OrgUser.status == OrgUserStatus(status_filter))
@@ -394,9 +383,7 @@ async def list_org_users(
 
     total = (await db.execute(count_query)).scalar_one()
     result = await db.execute(
-        query.order_by(OrgUser.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
+        query.order_by(OrgUser.created_at.desc()).offset((page - 1) * per_page).limit(per_page)
     )
     users = result.scalars().all()
 

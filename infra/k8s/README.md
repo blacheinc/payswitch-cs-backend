@@ -1,6 +1,6 @@
 # Kubernetes Deployment
 
-> Companion to [`docs/deployment/k8s-overview.md`](../../docs/deployment/k8s-overview.md), which is the talking-points / architecture doc. **This file is the operator-facing reference for the manifests.**
+> Companion to [`docs/deployment/k8s-overview.md`](../../docs/deployment/k8s-overview.md), which defines the Kubernetes integration architecture. **This file is the operator-facing reference for the manifests.**
 >
 > The Bicep / Container Apps deploy in [`docs/deployment/README.md`](../../docs/deployment/README.md) is an alternative, not a prerequisite — the same image works for both targets.
 
@@ -25,7 +25,7 @@ infra/k8s/
 │   └── example/
 │       └── kustomization.yaml  ← fork per env (prod, staging, …)
 ├── argocd-application.example.yaml
-├── gitlab-ci.example.yml
+├── gitlab-ci.example.yml        ← minimal reference; root .gitlab-ci.yml is canonical
 └── README.md (this file)
 ```
 
@@ -137,19 +137,16 @@ Cons: slower cold start; KV becomes a hard runtime dependency for boot.
 
 ## Migrations
 
-The image's [`entrypoint.sh`](../../entrypoint.sh) runs `alembic upgrade
-head` on every container start. That alone is sufficient for
-single-replica or dev environments.
-
-For production you probably want the **Argo CD pre-sync Job** pattern:
+The supplied base uses the **Argo CD PreSync Job** pattern:
 
 - [`base/job-migrate.yaml`](./base/job-migrate.yaml) is annotated with
   `argocd.argoproj.io/hook: PreSync`. Argo waits for the Job to succeed
   before applying the new Deployment.
 - A failed migration blocks the sync — the new image never serves
   traffic.
-- The Job and entrypoint coexist: the Job runs first, the entrypoint's
-  `alembic upgrade head` becomes a no-op on the second pass.
+- `RUN_DB_MIGRATIONS=false` and `RUN_BOOTSTRAP_ADMIN=false` on API pods
+  prevent replica startup races.
+- The Job's explicit command is the sole migration/bootstrap owner.
 
 To disable the Job entirely (e.g. dev), remove it from
 `base/kustomization.yaml`'s `resources` list.
@@ -161,28 +158,32 @@ To disable the Job entirely (e.g. dev), remove it from
 | Knob | Default | Where |
 |---|---|---|
 | Liveness | `GET /health` every 30 s | `base/deployment.yaml` |
-| Readiness | `GET /health` every 10 s | `base/deployment.yaml` |
+| Readiness | `GET /ready` every 10 s (Postgres + Redis) | `base/deployment.yaml` |
 | Startup probe grace | 5 min (allows alembic on slow DBs) | `base/deployment.yaml` |
 | HPA replicas | min 2, max 10 | `base/hpa.yaml` |
 | HPA target | 70 % CPU, 80 % memory | `base/hpa.yaml` |
 | PDB | `minAvailable: 1` | `base/deployment.yaml` |
 | Graceful shutdown | 60 s | `base/deployment.yaml` |
 
-The 60 s grace period lets in-flight scoring requests finish and Service
-Bus subscribers ack their messages before SIGKILL. Don't reduce it
-without testing — abrupt shutdowns can leave SB messages stuck in flight.
+The 60-second grace period lets in-flight scoring requests finish and Service
+Bus subscribers acknowledge their messages before termination. Validate any
+environment-specific adjustment with the isolated E2E suite.
 
 ---
 
 ## CI
 
-[`gitlab-ci.example.yml`](./gitlab-ci.example.yml) shows the recommended
-GitLab pipeline:
+The repository-root [`.gitlab-ci.yml`](../../.gitlab-ci.yml) is the canonical
+handover pipeline. It runs:
 
-1. **test** — pytest (gates everything else).
-2. **build** — Docker build + push to GitLab Container Registry.
-3. **release** — rewrite the overlay's `kustomization.yaml` with the new
-   image tag and commit. Argo CD picks up the manifest change and syncs.
+1. **quality** — Ruff formatting/lint and mypy.
+2. **test** — 60% overall and 80% critical-path coverage gates.
+3. **security** — pip-audit and Bandit.
+4. **package** — non-root container build and inspection.
+5. **deploy-validate** — Kustomize/Argo policy checks and isolated E2E.
+
+[`gitlab-ci.example.yml`](./gitlab-ci.example.yml) remains a smaller tag-bump
+reference if the client separates application CI from its GitOps repository.
 
 Required CI/CD variables (Project Settings → CI/CD → Variables):
 
@@ -198,15 +199,14 @@ on releases vs. SHA tags on every main commit, etc.).
 
 ## Observability
 
-The app emits structured stdout logs (after the Phase-B logger config
-clean-up). Whatever ships container stdout in the cluster — Loki +
-Promtail, Fluent Bit + Elasticsearch, Datadog, etc. — gets useful logs
-out of the box.
+The app emits structured stdout logs that integrate directly with cluster log
+collectors such as Loki/Promtail, Fluent Bit/Elasticsearch or Datadog.
 
-For metrics: there's no Prometheus endpoint exposed today. If the team
-needs one, the cleanest path is to add a `prometheus-fastapi-instrumentator`
-middleware in `app/main.py` that exposes `/metrics`, then add a
-`ServiceMonitor` in the overlay. Document this; don't pre-build it.
+Application monitoring is provided by the platform monitoring endpoints,
+`RequestMetric` persistence and health/readiness probes. Clusters that
+standardize on Prometheus can add HTTP-level instrumentation and a
+`ServiceMonitor` in their environment overlay without changing the deployment
+contract.
 
 ---
 
@@ -222,13 +222,14 @@ middleware in `app/main.py` that exposes `/metrics`, then add a
 
 ---
 
-## Open items
+## Environment-owned configuration
 
-These are deliberate non-decisions left to the cluster operator:
+These values are intentionally supplied by the target platform because they
+depend on cluster standards and capacity:
 
 - **Choice of Ingress controller** (we use `ingressClassName: nginx`; swap as needed).
 - **TLS issuance** (cert-manager + Let's Encrypt is the assumed default; bring your own if not).
 - **Network policies** restricting egress to Postgres / Redis / Service Bus / KV / DE-orchestrator URLs.
 - **Postgres connection budget** vs. replica count × `database_pool_size` (default 30 per pod).
 - **PgBouncer** in front of Postgres if connections become a bottleneck.
-- **Custom Prometheus / Datadog metrics** — not exposed by default.
+- **Metrics export integration** for the platform's selected observability stack.

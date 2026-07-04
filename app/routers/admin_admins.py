@@ -12,6 +12,7 @@ The bootstrap script (``scripts/create_superuser.py``) remains the only
 way to mint the very first admin — these HTTP endpoints all require an
 authenticated caller holding the matching ``admin.admins.*`` permission.
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -42,9 +43,7 @@ router = APIRouter(prefix="/admin/admins", tags=["Platform Admin Users"])
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-async def _resolve_platform_role(
-    db: AsyncSession, role_id: UUID | None
-) -> Role:
+async def _resolve_platform_role(db: AsyncSession, role_id: UUID | None) -> Role:
     """Return the platform-scoped :class:`Role` to assign to an admin.
 
     * If ``role_id`` is provided it must exist and be ``scope == "platform"``.
@@ -53,15 +52,11 @@ async def _resolve_platform_role(
       a super admin unless the caller asks for something narrower.
     """
     if role_id is not None:
-        role = (
-            await db.execute(select(Role).where(Role.id == role_id))
-        ).scalar_one_or_none()
+        role = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
         if not role:
             raise NotFoundError("Role", str(role_id))
         if role.scope != "platform":
-            raise ValidationError(
-                "Only platform-scoped roles can be assigned to platform admins"
-            )
+            raise ValidationError("Only platform-scoped roles can be assigned to platform admins")
         return role
 
     super_admin = (
@@ -73,9 +68,7 @@ async def _resolve_platform_role(
         )
     ).scalar_one_or_none()
     if not super_admin:
-        raise ValidationError(
-            "System SUPER_ADMIN role not found — ensure seeder has run"
-        )
+        raise ValidationError("System SUPER_ADMIN role not found — ensure seeder has run")
     return super_admin
 
 
@@ -133,17 +126,19 @@ async def _assert_not_last_super_admin(
         )
 
 
-async def _detail_response(
-    db: AsyncSession, admin: AdminUser
-) -> AdminUserDetailResponse:
+async def _detail_response(db: AsyncSession, admin: AdminUser) -> AdminUserDetailResponse:
     """Hydrate an admin row with its RBAC role for the API response."""
     role_row = (
-        await db.execute(
-            select(Role)
-            .join(AdminUserRole, AdminUserRole.role_id == Role.id)
-            .where(AdminUserRole.admin_user_id == admin.id)
+        (
+            await db.execute(
+                select(Role)
+                .join(AdminUserRole, AdminUserRole.role_id == Role.id)
+                .where(AdminUserRole.admin_user_id == admin.id)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
     return AdminUserDetailResponse(
         id=admin.id,
@@ -189,10 +184,7 @@ async def invite_admin(
     # set something sensible from the RBAC role we actually care about.
     from app.models.user import AdminRole
 
-    legacy_role = (
-        AdminRole.SUPER_ADMIN if role.name == "SUPER_ADMIN"
-        else AdminRole.OPERATIONS
-    )
+    legacy_role = AdminRole.SUPER_ADMIN if role.name == "SUPER_ADMIN" else AdminRole.OPERATIONS
 
     new_admin = AdminUser(
         email=body.email,
@@ -204,11 +196,13 @@ async def invite_admin(
     db.add(new_admin)
     await db.flush()
 
-    db.add(AdminUserRole(
-        admin_user_id=new_admin.id,
-        role_id=role.id,
-        assigned_by=auth.user_id,
-    ))
+    db.add(
+        AdminUserRole(
+            admin_user_id=new_admin.id,
+            role_id=role.id,
+            assigned_by=auth.user_id,
+        )
+    )
     await db.flush()
 
     email_service.send_invite_email(
@@ -228,9 +222,7 @@ async def list_admins(
     per_page: int = Query(20, ge=1, le=100),
 ) -> AdminUserListResponse:
     """List all platform admins (paginated, newest first)."""
-    total = (
-        await db.execute(select(func.count()).select_from(AdminUser))
-    ).scalar_one()
+    total = (await db.execute(select(func.count()).select_from(AdminUser))).scalar_one()
 
     result = await db.execute(
         select(AdminUser)
@@ -297,19 +289,19 @@ async def update_admin(
             )
 
         existing_rbac = (
-            await db.execute(
-                select(AdminUserRole).where(AdminUserRole.admin_user_id == admin.id)
-            )
+            await db.execute(select(AdminUserRole).where(AdminUserRole.admin_user_id == admin.id))
         ).scalar_one_or_none()
         if existing_rbac:
             existing_rbac.role_id = new_role.id
             existing_rbac.assigned_by = auth.user_id
         else:
-            db.add(AdminUserRole(
-                admin_user_id=admin.id,
-                role_id=new_role.id,
-                assigned_by=auth.user_id,
-            ))
+            db.add(
+                AdminUserRole(
+                    admin_user_id=admin.id,
+                    role_id=new_role.id,
+                    assigned_by=auth.user_id,
+                )
+            )
 
     await db.flush()
     await db.refresh(admin)
@@ -330,9 +322,7 @@ async def suspend_admin(
     if str(admin.id) == str(auth.user_id):
         raise ConflictError("Cannot suspend yourself")
     if admin.status != AdminUserStatus.ACTIVE:
-        raise ConflictError(
-            f"Can only suspend active admins, current: '{admin.status.value}'"
-        )
+        raise ConflictError(f"Can only suspend active admins, current: '{admin.status.value}'")
 
     await _assert_not_last_super_admin(db, admin.id, reason="suspend this admin")
 
@@ -385,9 +375,7 @@ async def delete_admin(
 
     # Detach RBAC role so listing shows "no role" for removed admins.
     existing_rbac = (
-        await db.execute(
-            select(AdminUserRole).where(AdminUserRole.admin_user_id == admin.id)
-        )
+        await db.execute(select(AdminUserRole).where(AdminUserRole.admin_user_id == admin.id))
     ).scalar_one_or_none()
     if existing_rbac:
         await db.delete(existing_rbac)

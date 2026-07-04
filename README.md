@@ -40,11 +40,22 @@ See [`docs/deployment/README.md`](docs/deployment/README.md) for the full playbo
 ### Deployment
 - **[`docs/deployment/README.md`](docs/deployment/README.md)** — operator entrypoint.
 - **[`docs/deployment/post-deploy.md`](docs/deployment/post-deploy.md)** — first-run checklist.
+- **[`docs/deployment/key-vault-setup.md`](docs/deployment/key-vault-setup.md)** — Key Vault identity, secret resolution and rotation.
 - **[`docs/deployment/runbook.md`](docs/deployment/runbook.md)** — day-2 operations (scaling, rotation, DR).
-- **[`docs/deployment/troubleshooting.md`](docs/deployment/troubleshooting.md)** — known failure modes + fixes.
-- **[`docs/deployment/k8s-overview.md`](docs/deployment/k8s-overview.md)** — Kubernetes deployment talking points (alternative to ACA).
+- **[`docs/deployment/troubleshooting.md`](docs/deployment/troubleshooting.md)** — operational diagnostics and recovery procedures.
+- **[`docs/deployment/k8s-overview.md`](docs/deployment/k8s-overview.md)** — Kubernetes, Argo CD and GitLab CI integration architecture.
 - **[`infra/bicep/README.md`](infra/bicep/README.md)** — Bicep parameter reference.
 - **[`infra/k8s/README.md`](infra/k8s/README.md)** — Kustomize manifests + Argo CD + GitLab CI examples.
+
+### Assurance and handover
+- **[`docs/handover/README.md`](docs/handover/README.md)** — root index for backend QA, code review, VAPT, security controls and DPIA technical input.
+- [`docs/handover/executive-summary.md`](docs/handover/executive-summary.md) — client-facing backend delivery and assurance summary.
+- [`docs/handover/responsibility-matrix.md`](docs/handover/responsibility-matrix.md) — ownership across Backend, Frontend, AI, Data and assurance teams.
+- [`docs/handover/delivery-acceptance-checklist.md`](docs/handover/delivery-acceptance-checklist.md) — completed backend scope and coordinated project acceptance.
+- [`docs/handover/qa/backend-qa-report.md`](docs/handover/qa/backend-qa-report.md) — date-stamped QA evidence and release recommendation.
+- [`docs/handover/security/internal-vapt-report.md`](docs/handover/security/internal-vapt-report.md) — internal assessment; not a substitute for the independent VAPT.
+- [`docs/handover/security/backend-security-controls.md`](docs/handover/security/backend-security-controls.md) — implemented backend controls and deployment responsibilities.
+- [`docs/handover/security/security-assurance-register.md`](docs/handover/security/security-assurance-register.md) — consolidated security verification results.
 
 ### Frontend integration
 - [`docs/fe_rbac_integration_guide.md`](docs/fe_rbac_integration_guide.md) — org-side RBAC.
@@ -79,6 +90,20 @@ uvicorn app.main:app --reload
 ```
 
 `http://localhost:8000/docs` → OpenAPI UI.
+
+### Demo data (business demo, no Azure / no live AI)
+
+To populate every dashboard with rich, realistic data without Azure or the AI
+pipeline, see [`docs/demo/README.md`](docs/demo/README.md):
+
+```bash
+docker compose up -d postgres
+.venv/bin/alembic upgrade head
+.venv/bin/python scripts/seed_demo_data.py --reset --scale medium
+```
+
+Logins: `admin@payswitch.demo` / `DemoPass!2026` (platform), `admin@gcm.com.gh`
+/ `DemoPass!2026` (org). The same script seeds Railway — see the demo doc.
 
 ### Running tests
 

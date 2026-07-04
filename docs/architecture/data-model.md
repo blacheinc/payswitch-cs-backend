@@ -44,7 +44,7 @@ The foundation for every other domain. Three principal types (`AdminUser`, `OrgU
 ## Migration policy
 
 - **Every schema change ships as an Alembic revision.** Never edit the DB directly.
-- **Migrations are fatal in production** (see `entrypoint.sh`). A failed migration stops the container from accepting traffic rather than silently running on stale schema.
+- **Migrations are release-gated in production** (see `entrypoint.sh`). Traffic is admitted only after the target schema revision has applied successfully.
 - **Backfills that exceed ~60 s runtime** should be split: the migration adds the column with a null-safe default, a follow-up script does the backfill, and a later migration adds the `NOT NULL` constraint. Keeps container boot under the ACA health-probe grace window.
 
 ## Inspecting the schema on a live deploy

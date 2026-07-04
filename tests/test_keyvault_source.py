@@ -11,6 +11,7 @@ The source must:
 We never contact Azure in these tests — a fake ``SecretClient`` is
 injected via monkeypatching the ``_build_client`` factory.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -25,7 +26,6 @@ from app.config.keyvault_source import (
     KeyVaultSettingsSource,
     _field_name_to_secret_name,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,7 @@ def _clear_kv_state(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     from app.config import get_settings
+
     get_settings.cache_clear()
     yield
     KeyVaultSettingsSource.reset()
@@ -75,6 +76,7 @@ def _install_fake_client(
             return SimpleNamespace(value=secrets[name])
         # Mimic the real ResourceNotFoundError surface on unknown names.
         from azure.core.exceptions import ResourceNotFoundError
+
         raise ResourceNotFoundError(message=f"Secret '{name}' not found")
 
     client = MagicMock()
@@ -205,9 +207,7 @@ def test_all_secret_fields_are_valid_settings_attributes():
     """Every entry in the allowlist must correspond to a real field."""
     known = set(Settings.model_fields.keys())
     unknown = SECRET_FIELDS - known
-    assert not unknown, (
-        f"SECRET_FIELDS references fields not on Settings: {sorted(unknown)}"
-    )
+    assert not unknown, f"SECRET_FIELDS references fields not on Settings: {sorted(unknown)}"
 
 
 def test_full_settings_build_uses_mix_of_kv_and_env(monkeypatch):
@@ -224,7 +224,7 @@ def test_full_settings_build_uses_mix_of_kv_and_env(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://env/db")
 
     s = Settings()
-    assert s.jwt_secret_key == "kv-jwt"          # from KV
-    assert s.xds_password == "kv-xds-password"    # from KV
-    assert s.xds_username == "env-xds-user"       # env fallback (not in vault)
-    assert s.database_url.endswith("/db")          # env fallback (not in vault)
+    assert s.jwt_secret_key == "kv-jwt"  # from KV
+    assert s.xds_password == "kv-xds-password"  # from KV
+    assert s.xds_username == "env-xds-user"  # env fallback (not in vault)
+    assert s.database_url.endswith("/db")  # env fallback (not in vault)

@@ -7,11 +7,10 @@ and maps upstream responses back to the client.
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError as PydanticValidationError
 
 from app.dependencies import AuthContext, require_permission
 from app.schemas.monitoring import RuleEvaluateRequest
@@ -35,8 +34,6 @@ async def evaluate_rules(
     # Pydantic already validates PD range (ge=0, le=1) and score_grade (pattern ^[A-F]$)
     # via the RuleEvaluateRequest schema. If we reach here, input is valid.
 
-    status_code, response_body = await forward_rule_evaluation(
-        body.model_dump(mode="json")
-    )
+    status_code, response_body = await forward_rule_evaluation(body.model_dump(mode="json"))
 
     return JSONResponse(status_code=status_code, content=response_body)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -14,7 +14,6 @@ from app.schemas.bureau_schemas import (
     BureauFeatures,
 )
 from app.schemas.common import BaseSchema
-
 
 # ── Score Request Input (mirrors PRD Section 7.1) ─────────────────────────────
 
@@ -56,6 +55,7 @@ class LoanRequestSummary(BaseModel):
 
 class BureauData(BaseModel):
     """Bureau data from the bureau-lookup step, forwarded in the score request."""
+
     # Key for retrieving cached raw XDS data from Redis
     consumer_id: str
     # Bureau hit metadata
@@ -190,7 +190,7 @@ class ScoreRequestResponse(BaseModel):
     affordability: AffordabilityAssessment | None = None
     model_info: ModelInfo | None = None
     timestamps: ScoreTimestamps
-    scoring_result: Optional["ScoringResultResponse"] = None
+    scoring_result: ScoringResultResponse | None = None
     error: ScoreError | None = None
 
 
@@ -211,7 +211,7 @@ class ScoreRequestSummary(BaseSchema):
     request_source: str
     created_at: datetime
     scored_at: datetime | None
-    scoring_result: Optional["ScoringResultResponse"] = None
+    scoring_result: ScoringResultResponse | None = None
 
 
 # ── Outcome / Performance ────────────────────────────────────────────────────
@@ -316,7 +316,7 @@ class ScoringMetadata(BaseModel):
 
 class ScoringResultResponse(BaseModel):
     """Full scoring result from the AI pipeline — shown to loan officers."""
-    
+
     model_config = {"from_attributes": True}
 
     request_id: str
@@ -337,7 +337,7 @@ class ScoringResultResponse(BaseModel):
     errors: list[str] | None = None  # Only for ERROR decisions
 
     @model_validator(mode="after")
-    def _surface_hard_stop_details(self) -> "ScoringResultResponse":
+    def _surface_hard_stop_details(self) -> ScoringResultResponse:
         """Extract decline reasons from scoring_metadata for hard-stop declines.
 
         When loaded via ``from_attributes`` (ORM relationship), the ORM object
@@ -381,9 +381,7 @@ class HardStopDeclineResponse(BaseModel):
 class OverrideDecisionRequest(BaseModel):
     """Manual decision override for REFER cases."""
 
-    decision: str = Field(
-        description="APPROVE, CONDITIONAL_APPROVE, or DECLINE"
-    )
+    decision: str = Field(description="APPROVE, CONDITIONAL_APPROVE, or DECLINE")
     override_reason: str = Field(min_length=5, max_length=1000)
     conditions: list[str] | None = None
     approved_amount: float | None = None

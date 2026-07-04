@@ -12,11 +12,14 @@ Tests:
 
 import asyncio
 import json
+import os
 import httpx
 
-XDS_BASE_URL = "https://www.online.xdsdata.com/XdsDataRestApi/Api"
-USERNAME = "WebCM@PSCL"
-PASSWORD = "WebCM@PSCL"
+XDS_BASE_URL = os.environ.get(
+    "XDS_BASE_URL", "https://www.online.xdsdata.com/XdsDataRestApi/Api"
+)
+USERNAME = os.environ.get("XDS_USERNAME", "")
+PASSWORD = os.environ.get("XDS_PASSWORD", "")
 
 PASS = "✅"
 FAIL = "❌"
