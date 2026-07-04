@@ -1,8 +1,9 @@
 # PaySwitch Backend Handover Pack
 
-**Prepared:** 30 June 2026  
-**Owner:** Backend Engineering  
-**Status:** **Complete and ready for client handover**
+- **Prepared:** 30 June 2026
+- **Evidence refreshed:** 4 July 2026
+- **Owner:** Backend Engineering
+- **Status:** **Complete and ready for client handover**
 
 ## Executive position
 

@@ -4,6 +4,21 @@
 - **Scope:** PaySwitch backend application and supplied deployment assets
 - **Status:** **Implemented and verified**
 
+## Control position
+
+The backend applies layered preventive, detective and resilience controls at
+the identity, API, data, integration, runtime and delivery boundaries. Security
+decisions are centralized in reusable dependencies and services so the same
+policy is applied consistently across organisation and platform workflows.
+
+The verified control set provides:
+
+- authenticated and permission-scoped access;
+- organisation isolation and audited privileged access;
+- protected credentials, secrets and webhook messages;
+- validated input, bounded external calls and abuse controls;
+- traceable operations, isolated batch processing and least-privilege runtime execution.
+
 ## Control register
 
 | Domain | Implemented control | Verification evidence |

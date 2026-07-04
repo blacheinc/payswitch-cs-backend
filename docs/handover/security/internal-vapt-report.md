@@ -1,7 +1,7 @@
 # Internal Backend Application Security Assessment
 
-- **Assessment date:** 30 June 2026
-- **Assessment type:** Implementation-team internal VAPT
+- **Assessment date:** 4 July 2026
+- **Assessment type:** Implementation-team internal application security assessment
 - **Result:** **Passed**
 
 ## Executive conclusion
@@ -12,9 +12,10 @@ analysis completed with zero current findings, and manual review confirmed
 strong controls across authentication, authorization, tenant isolation,
 secrets, auditability, integrations, containers and Kubernetes deployment.
 
-This report records the implementation team's internal VAPT. The separately
-commissioned independent VAPT will provide an additional third-party assessment
-in the client-authorized deployed environment.
+This report records the implementation team's internal application security
+assessment and provides backend evidence for the project security-assurance
+workstream. The separately commissioned independent VAPT will provide dynamic,
+third-party assessment in the client-authorized deployed environment.
 
 ## Scope
 
@@ -37,7 +38,8 @@ in the client-authorized deployed environment.
 - Bandit static application security testing.
 - Ruff and mypy correctness gates.
 - Kubernetes/Argo manifest rendering and security-policy assertions.
-- Isolated end-to-end authentication and batch-processing verification.
+- Local and containerized isolated end-to-end authentication and
+  batch-processing verification.
 
 ## Verified results
 
@@ -51,7 +53,7 @@ in the client-authorized deployed environment.
 | Authentication modes tested | Platform JWT, organisation JWT and API key |
 | Hard-stop rules tested | 7 of 7 |
 | Tenant/cross-org authorization tests | Passed |
-| Isolated batch E2E | Passed |
+| Local and containerized isolated batch E2E | Passed |
 | Kubernetes least-privilege assertions | Passed |
 
 ## Control observations

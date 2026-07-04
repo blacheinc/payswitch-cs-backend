@@ -33,7 +33,7 @@ maintaining strict organisation boundaries and role-based access.
 | Bandit | Zero findings |
 | Third-party dependency audit | Zero known vulnerabilities |
 | Alembic topology | One migration head |
-| Isolated batch E2E | Passed |
+| Local and containerized isolated batch E2E | Passed |
 | Kubernetes/Argo render and policy checks | Passed |
 
 ## Deployment readiness

@@ -45,3 +45,14 @@ USER app
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
+
+# CI-only image target. The production target intentionally excludes demo
+# tooling, while the isolated E2E target includes the deterministic seeder.
+FROM runtime AS integration
+
+COPY --chown=app:app scripts/seed_demo_data.py ./scripts/seed_demo_data.py
+
+
+# Keep the default Docker build output production-only.
+FROM runtime AS production
