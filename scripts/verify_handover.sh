@@ -3,8 +3,10 @@ set -eu
 
 PYTHON="${PYTHON:-.venv/bin/python}"
 
-"$PYTHON" -m ruff check app tests scripts
-"$PYTHON" -m ruff format --check app tests scripts
+MIGRATION="alembic/versions/a9b0c1d2e3f4_sync_application_enum_contracts.py"
+
+"$PYTHON" -m ruff check app tests scripts "$MIGRATION"
+"$PYTHON" -m ruff format --check app tests scripts "$MIGRATION"
 "$PYTHON" -m mypy app tests
 "$PYTHON" -m pytest --cov=app --cov-report=term
 "$PYTHON" -m pytest \

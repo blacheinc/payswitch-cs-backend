@@ -41,11 +41,11 @@ def create_access_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Create a short-lived access JWT."""
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
-    )
+    issued_at = datetime.now(UTC)
+    expire = issued_at + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
     to_encode: dict[str, Any] = {
         "sub": str(subject),
+        "iat": issued_at,
         "exp": expire,
         "type": "access",
     }
@@ -59,11 +59,11 @@ def create_refresh_token(
     expires_delta: timedelta | None = None,
 ) -> str:
     """Create a long-lived refresh JWT."""
-    expire = datetime.now(UTC) + (
-        expires_delta or timedelta(days=settings.refresh_token_expire_days)
-    )
+    issued_at = datetime.now(UTC)
+    expire = issued_at + (expires_delta or timedelta(days=settings.refresh_token_expire_days))
     to_encode: dict[str, Any] = {
         "sub": str(subject),
+        "iat": issued_at,
         "exp": expire,
         "type": "refresh",
         "jti": secrets.token_hex(16),

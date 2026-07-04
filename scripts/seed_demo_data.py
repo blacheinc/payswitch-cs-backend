@@ -291,70 +291,6 @@ async def reset_tables() -> None:
     print(f"[reset] Truncated {len(DEMO_TABLES)} demo tables.")
 
 
-# A fresh `alembic upgrade head` leaves four enum types out of sync with the
-# ORM models: industry_type / source_type / training_data_status were created
-# with UPPERCASE labels, and decision_type only has the legacy
-# APPROVED/DECLINED/REFERRED/PENDING set. The models bind the lowercase `.value`
-# (and the new decision values), so the app itself can't read/write these tables
-# until they're normalized. This aligns the DB enums to the models. Idempotent.
-ENUM_RENAMES = {
-    "industry_type": {
-        "BANK": "bank",
-        "FINTECH": "fintech",
-        "MFI": "mfi",
-        "SACCO": "sacco",
-        "OTHER": "other",
-    },
-    "source_type": {
-        "BANK": "bank",
-        "BUREAU": "bureau",
-        "TELCO": "telco",
-        "UTILITY": "utility",
-        "OTHER": "other",
-    },
-    "training_data_status": {
-        "PENDING": "pending",
-        "PROCESSING": "processing",
-        "COMPLETED": "completed",
-        "APPROVED": "approved",
-        "REJECTED": "rejected",
-        "FAILED": "failed",
-    },
-    "decision_type": {"APPROVED": "approved", "DECLINED": "declined", "REFERRED": "referred"},
-}
-ENUM_ADDS = {
-    "decision_type": ["APPROVE", "CONDITIONAL_APPROVE", "REFER", "DECLINE", "FRAUD_HOLD", "ERROR"],
-}
-
-
-async def normalize_enums() -> None:
-    from app.db import engine
-
-    async with engine.connect() as conn:
-        ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        for typ, mapping in ENUM_RENAMES.items():
-            rows = await ac.execute(
-                text(
-                    "SELECT e.enumlabel FROM pg_enum e JOIN pg_type t "
-                    "ON t.oid = e.enumtypid WHERE t.typname = :t"
-                ),
-                {"t": typ},
-            )
-            labels = {r[0] for r in rows}
-            for old, new in mapping.items():
-                if old in labels and new not in labels:
-                    await ac.execute(text(f"ALTER TYPE {typ} RENAME VALUE '{old}' TO '{new}'"))
-                    labels.discard(old)
-                    labels.add(new)
-        for typ, vals in ENUM_ADDS.items():
-            for v in vals:
-                await ac.execute(text(f"ALTER TYPE {typ} ADD VALUE IF NOT EXISTS '{v}'"))
-    print(
-        "[enums] normalized industry_type / source_type / "
-        "training_data_status / decision_type to match ORM models."
-    )
-
-
 async def already_seeded() -> bool:
     async with async_session_factory() as db:
         row = await db.execute(text("SELECT 1 FROM organizations WHERE short_name = 'gcm' LIMIT 1"))
@@ -1877,8 +1813,6 @@ async def main() -> int:
     if db_now is not None:
         NOW = db_now
         print(f"[clock] anchored data window to DB now() = {NOW.isoformat()}")
-
-    await normalize_enums()
 
     if args.reset:
         await reset_tables()

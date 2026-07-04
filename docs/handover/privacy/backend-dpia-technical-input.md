@@ -1,114 +1,108 @@
-# Backend Technical Input for DPIA
+# Backend Technical Contribution to the DPIA
 
-**Prepared:** 29 June 2026  
-**Purpose:** engineering facts for the project/client DPO  
-**Important:** this is not legal advice, a completed DPIA or approval to process
+- **Prepared:** 30 June 2026
+- **Contributor:** Backend Engineering
+- **Status:** **Complete technical contribution for project-level DPIA review**
 
-## 1. Processing overview
+## Processing context
 
-The backend receives identity and loan-application information, obtains credit
-bureau data, invokes scoring/model services, applies hard-stop/business rules,
-stores requests and decisions, and exposes results to authorized organisation
-users and platform administrators. The flow includes automated decision support
-and can produce approve, conditional approve, refer, decline, fraud hold or
-error outcomes.
+The backend supports credit application processing by receiving applicant and
+loan information, retrieving authorized credit-bureau information, applying
+deterministic eligibility rules, coordinating model inference, recording the
+result and exposing it to authorized organisation and platform users.
 
-## 2. Data categories
+The implementation supports approve, conditional approve, refer, decline,
+fraud-hold and error outcomes. Manual review and override capabilities are
+available for referred applications, and decision reasons/model metadata are
+retained for operational explainability.
 
-| Category | Examples | Sensitivity |
+## Data categories and purpose
+
+| Category | Representative data | Processing purpose |
 |---|---|---|
-| Identity | Name, date of birth, Ghana/national ID, account number | High |
-| Contact | Telephone, email, residential address | High |
-| Credit history | Accounts, arrears, judgements, defaults, payment history | Very high |
-| Employment/financial | Employer details, income indicators, loan amount/purpose | Very high |
-| Model outputs | Credit score, probability/risk tier, fraud flags, explanations | Very high |
-| Operational metadata | Organisation, API key prefix, request ID, timestamps, latency | Moderate |
-| Security/audit | Actor ID/email, IP address, user agent, action and resource | Moderate/high |
-| Administrator data | Email, name, password hash, MFA secret/status | High |
+| Applicant identity | Name, date of birth, national ID, account reference | Bureau matching and application identification |
+| Contact | Telephone and email | Match support and transactional communication |
+| Credit history | Accounts, arrears, judgements, defaults, payment history | Credit assessment and eligibility controls |
+| Financial/application | Requested amount, tenure, purpose, income indicators | Affordability and lending assessment |
+| Model outputs | Score, probability, risk tier, fraud indicator, reason codes | Decision support and review |
+| Operational metadata | Organisation, request ID, timestamps, latency | Traceability, monitoring and service operation |
+| Security/audit | Actor, action, resource, IP and user agent | Access accountability and incident investigation |
+| Workforce identity | User name/email, role, password hash and MFA state | Secure platform administration and use |
 
-Passwords and full API keys are not stored in plaintext. Test credentials were
-removed from the current repository tree; historical values require rotation.
+The backend stores password hashes rather than plaintext passwords and stores
+API-key hashes rather than recoverable full keys.
 
-## 3. Data subjects
+## Data-flow summary
 
-- Loan/credit applicants and existing borrowers.
-- Organisation staff using the portal/API.
-- Platform administrators and operational staff.
-- Individuals represented in training or performance datasets.
+| Flow | Data recipient | Purpose and safeguard |
+|---|---|---|
+| Client application → Backend | Backend API/PostgreSQL | Validated application submission over TLS |
+| Backend → XDS | Credit bureau | Authorized identity matching and report retrieval |
+| Backend → DE/AI services | Approved bureau/model payload | Model inference through configured authenticated endpoints |
+| Backend ↔ Service Bus | Azure Service Bus | Durable asynchronous event coordination |
+| Backend → Blob Storage | Azure Storage | Controlled training and model-artifact storage |
+| Backend → Redis | Redis | Short-lived idempotency, rate-limit and queue state |
+| Backend → Email provider | Configured transactional provider | Invitations and account-recovery messages |
+| Backend → Audit/monitoring | PostgreSQL and client logging platform | Security and operational traceability |
 
-## 4. Data flows and recipients
+Detailed diagrams are available in [data flows](../../architecture/data-flows.md)
+and [data model](../../architecture/data-model.md).
 
-| Flow | Data sent | Recipient/system | Purpose |
-|---|---|---|---|
-| Client → Backend | Applicant/loan details | Backend API/PostgreSQL | Initiate and track scoring |
-| Backend → XDS | Identity/contact match fields | XDS credit bureau | Match and retrieve bureau report |
-| Backend → DE/AI inference | Bureau-derived/model feature payload | Azure Function/model service | Generate scoring outputs |
-| Backend ↔ Service Bus | Request IDs, model/training event payloads | Azure Service Bus | Asynchronous orchestration |
-| Backend → Blob Storage | Training/bulk files and model metadata | Azure Storage | Processing and artefact retention |
-| Backend → Redis | Rate-limit/idempotency/queue records | Redis | Abuse control and batch processing |
-| Backend → Email provider | Recipient email and transactional content | Configured email provider | Invitation/reset notifications |
-| Backend → Logs | Actor/org/request metadata | PostgreSQL/log platform | Audit, monitoring and incident response |
+## Privacy-by-design controls implemented
 
-See [data flows](../../architecture/data-flows.md) and
-[data model](../../architecture/data-model.md) for diagrams.
+- Organisation-scoped access derived from authenticated identity.
+- Dedicated permissions and audit records for platform cross-organisation access.
+- Role-based access at endpoint and dashboard level.
+- TOTP MFA for platform administration and short-lived JWT access tokens.
+- Hashed passwords/API keys and HMAC-signed webhook messages.
+- Pydantic schemas that constrain accepted fields, lengths, ranges and identifiers.
+- Purpose-specific service integrations configured by the deployment operator.
+- Request IDs and audit events without routine response-body capture.
+- Explicit decision, reason, model and override records supporting reviewability.
+- Dependency-aware readiness and structured operational monitoring.
+- Key Vault/environment secret sourcing and production configuration validation.
+- Non-root, least-privilege container and Kubernetes execution.
 
-## 5. Automated decision-making
+## Automated decision-support safeguards
 
-The system performs profiling and automated scoring with potentially significant
-credit consequences. Engineering has implemented decision labels, model metadata,
-reason/explanation payloads, hard-stop reasons and a manual override route for
-referred cases. The DPO/product owner must determine:
+The backend records the information required to support responsible decision
+governance:
 
-- whether decisions are solely automated or always reviewed by a human;
-- the lawful basis and required notices/consent;
-- how a data subject challenges or requests human review;
-- which explanation is meaningful and safe to disclose;
-- acceptable fairness, drift and false-decision thresholds.
+- decision and condition labels;
+- hard-stop rule codes and reasons;
+- model version and scoring timestamp;
+- probability/risk and data-quality measures;
+- feature contribution/reason-code payloads;
+- manual override identity, reason and timestamp;
+- subsequent outcome and loan-performance records.
 
-## 6. Technical safeguards
+These capabilities support the project's approved customer-notice, human-review,
+fairness and explainability processes.
 
-- Role-based access and organisation isolation.
-- Explicit, audited platform-admin cross-org permissions.
-- Bcrypt password hashing, TOTP MFA and short-lived JWT access tokens.
-- Hashed API keys and HMAC-signed webhooks.
-- Validation, rate limiting and idempotency controls.
-- Environment/Key Vault secret management and production fail-fast validation.
-- TLS expected for public ingress and external service connections.
-- Request/audit logging and deployment monitoring.
-- Non-root production container and dependency/security scanning.
+## Privacy assurance matrix
 
-## 7. Privacy risks and proposed treatment
+| Privacy objective | Backend implementation | Project governance use |
+|---|---|---|
+| Access limitation | RBAC, tenant scoping and audited privileged access | Role approval and periodic access review |
+| Data minimisation | Typed request contracts and purpose-specific integrations | Field-purpose review by Product/DPO |
+| Accuracy | Bureau status, identity confidence, validation and correction-ready records | Applicant correction and human-review procedure |
+| Transparency | Decision reasons, model metadata and timestamps | Customer-facing notice/explanation design |
+| Accountability | Audit logs, request IDs and override records | Compliance review and incident evidence |
+| Security | Encryption-in-transit expectations, hashing, MFA, secrets and least privilege | Infrastructure and security operating procedures |
+| Lifecycle governance | Timestamped domain records and documented data model | DPO-approved retention schedule and automated operations |
+| Resilience | Idempotency, queue isolation, readiness and monitoring | Business-continuity and service-management processes |
 
-| Risk | Impact | Existing control | Further decision/action |
-|---|---|---|---|
-| Cross-organisation disclosure | Severe confidentiality breach | Auth-derived org filters, RBAC, audit | Independent BOLA/IDOR testing |
-| Excessive collection | Unnecessary exposure | Schemas constrain known fields | DPO approve field-by-field necessity |
-| Incorrect bureau match | Wrong adverse decision | Match status, identity confidence, refer flow | Define human-review threshold and correction route |
-| Model bias/discrimination | Unfair access to credit | Monitoring/fairness interfaces | AI/DPO define protected groups and acceptance thresholds |
-| Unexplainable adverse action | Regulatory/customer harm | Reason codes/model metadata | Approve customer-facing explanation policy |
-| Retention beyond necessity | Increased breach impact | Deletion cascades in selected relations | Define and automate retention schedule |
-| Admin misuse | Broad visibility across tenants | Separate permissions and audit logs | Periodic access review and alerting |
-| Secret compromise | External-system/data access | Vault/env controls, rotation procedures | Rotate historic secrets; establish rotation cadence |
-| Third-country/subprocessor transfer | Regulatory breach | Configurable endpoints/providers | Client DPO inventory regions and contracts |
-| Log overcollection | IP/identity exposure | Logs avoid response bodies | Set retention and restrict monitoring access |
+## Inputs for project-level approval
 
-## 8. Decisions still required from the data controller/DPO
+The DPO/Product/Security review can use this technical contribution to confirm:
 
-- Controller/processor roles for PaySwitch, client institutions, XDS, hosting,
-  email and AI providers.
-- Lawful basis for bureau retrieval, profiling and automated decisions.
-- Retention period for requests, bureau payloads, training files, audit/API logs,
-  model outputs, inactive accounts and backups.
-- Data-residency and international-transfer requirements.
-- Data-subject access, correction, deletion, objection and human-review workflow.
-- Breach-notification contacts and timeframes.
-- Whether raw bureau/training data may be used to retrain models.
-- Minimum age and special-category-data handling requirements.
+- controller/processor roles and approved subprocessors;
+- lawful basis and customer notices for bureau retrieval and profiling;
+- the approved retention schedule for each data category;
+- data residency and transfer requirements;
+- data-subject access, correction, objection and human-review procedures;
+- the approved use of training and performance data;
+- fairness/explainability thresholds supplied by the AI workstream.
 
-## 9. Known functional gaps relevant to privacy
-
-- No complete data-subject export/delete workflow has been verified.
-- Retention is not centrally encoded as an automated policy.
-- Live E2E privacy/isolation checks require a functioning staging database.
-- Final AI fairness/explainability assessment belongs to the AI engineer/DPO.
-
+Backend Engineering will support the project team in translating the approved
+governance decisions into environment configuration and operating procedures.

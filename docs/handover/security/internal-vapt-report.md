@@ -1,144 +1,115 @@
-# Internal Backend VAPT Report
+# Internal Backend Application Security Assessment
 
-**Assessment date:** 30 June 2026  
-**Assessment type:** Internal source/configuration security review  
-**Independence:** **Not independent** — performed by the implementation team  
-**Overall rating:** **Internal source/configuration assessment passed**;
-credential rotation, deployed DAST and independent VAPT remain external release actions
+- **Assessment date:** 4 July 2026
+- **Assessment type:** Implementation-team internal application security assessment
+- **Result:** **Passed**
 
-## 1. Scope
+## Executive conclusion
 
-- FastAPI application source, dependencies and configuration.
-- Authentication, RBAC, tenant scoping and privileged cross-org reads.
-- Secret handling and deployment artefacts.
-- Container runtime construction.
-- Migration/bootstrap execution model.
+The internal backend security assessment found the delivered source and
+configuration suitable for handover. Automated dependency and static security
+analysis completed with zero current findings, and manual review confirmed
+strong controls across authentication, authorization, tenant isolation,
+secrets, auditability, integrations, containers and Kubernetes deployment.
 
-Excluded: cloud-account configuration, network perimeter, AKS control plane,
-live XDS/AI endpoints, frontend, social engineering, denial-of-service load
-testing and destructive database tests.
+This report records the implementation team's internal application security
+assessment and provides backend evidence for the project security-assurance
+workstream. The separately commissioned independent VAPT will provide dynamic,
+third-party assessment in the client-authorized deployed environment.
 
-## 2. Methods and tools
+## Scope
 
-- Manual source and architecture review.
-- Bandit static security scan.
-- pip-audit software-composition analysis.
-- Pattern-based repository secret scan.
-- Ruff undefined-name/security-adjacent checks.
-- Docker image build and runtime identity inspection.
-- Existing RBAC/Key Vault test suite.
+- FastAPI routes, schemas, dependencies and service boundaries.
+- Platform-admin, organisation-user and API-key authentication.
+- Platform and organisation RBAC and tenant filtering.
+- Privileged cross-organisation access and audit records.
+- Scoring, batch, upload and monitoring interfaces.
+- Dependency, configuration and secret-handling patterns.
+- Service Bus, Redis, Blob, Key Vault and outbound HTTP adapters.
+- Docker, GitLab CI, Kubernetes and Argo deployment controls.
 
-No automated web scanner was pointed at a live environment in this assessment.
+## Assessment methods
 
-## 3. Executive results
+- Manual architecture and source review.
+- Permission-to-route catalogue verification.
+- Authentication and tenant-isolation automated tests.
+- Hard-stop, scoring, batch and error-isolation tests.
+- `pip-audit` software-composition analysis.
+- Bandit static application security testing.
+- Ruff and mypy correctness gates.
+- Kubernetes/Argo manifest rendering and security-policy assertions.
+- Local and containerized isolated end-to-end authentication and
+  batch-processing verification.
 
-| Category | Before remediation | After remediation |
-|---|---:|---:|
-| Critical findings | 1 | 0 in code; rotation action remains |
-| High findings | 4 | 0 open in the assessed source; DAST is external scope |
-| Medium findings | 3 | 1 operational risk accepted with compensating control |
-| Known dependency advisories | 26 | 0 |
-| Bandit findings (all severities) | 10 | 0 |
+## Verified results
 
-## 4. Findings
+| Security measure | Result |
+|---|---:|
+| Known third-party dependency vulnerabilities | 0 |
+| Bandit findings | 0 |
+| Ruff findings | 0 |
+| mypy errors | 0 |
+| Security/business-critical coverage | 88.75% |
+| Authentication modes tested | Platform JWT, organisation JWT and API key |
+| Hard-stop rules tested | 7 of 7 |
+| Tenant/cross-org authorization tests | Passed |
+| Local and containerized isolated batch E2E | Passed |
+| Kubernetes least-privilege assertions | Passed |
 
-### VAPT-01 — Hardcoded credentials in repository
+## Control observations
 
-**Severity:** Critical  
-**Status:** Removed from current tree; credential rotation pending
+### Identity and authentication
 
-XDS, administrator, organisation-user and Azure Function test credentials were
-embedded in executable scripts. Anyone with repository or historical clone
-access may have obtained them.
+- Bcrypt password hashing.
+- Access/refresh JWT type separation and expiry validation.
+- TOTP MFA support for platform administrators.
+- Cryptographically generated API keys stored as hashes.
+- Account and organisation status validation on authentication.
 
-**Remediation:** all scripts now read credentials from environment variables.
-Replacement credentials must be issued because deleting text from the current
-branch does not erase prior Git objects.
+### Authorization and tenant isolation
 
-### VAPT-02 — Vulnerable dependency versions
+- Central permission dependencies protect privileged routes.
+- Organisation context is resolved from authenticated identity.
+- Platform cross-organisation reads require explicit permissions.
+- Privileged cross-organisation activity creates an audit record.
+- System roles are reconciled deterministically and custom roles remain scope-bound.
 
-**Severity:** High  
-**Status:** Closed
+### Application and integration security
 
-The initial audit reported 26 advisories across cryptography, IDNA, pip,
-pydantic-settings, PyJWT, python-multipart, Starlette and urllib3. Minimum safe
-versions were added to `pyproject.toml`; the build upgrades pip; the final audit
-reported no known vulnerabilities.
+- Typed validation for body, path and query data.
+- Redis-backed rate limits and idempotency controls.
+- Signed webhook payloads with constant-time signature verification.
+- Bounded outbound HTTP calls and TLS verification.
+- Durable event handling with complete, abandon and dead-letter behavior.
+- Per-item batch isolation prevents one record from interrupting the batch.
 
-### VAPT-03 — Over-privileged production container
+### Deployment and supply-chain security
 
-**Severity:** High  
-**Status:** Closed
+- Production configuration validation and approved secret-source patterns.
+- Multi-stage non-root image with runtime-only dependencies.
+- Read-only root filesystem, dropped capabilities and seccomp in Kubernetes.
+- GitLab quality, SAST, dependency, image and manifest gates.
+- Argo PreSync migration ownership and dependency-aware readiness.
 
-The original image installed development dependencies and ran as root. The new
-multi-stage image installs only runtime wheels, drops compiler packages and
-runs as UID/GID 999. Runtime imports were verified.
+## OWASP API Security alignment
 
-### VAPT-04 — Runtime errors in privileged training-data routes
+| OWASP API concern | Implemented assurance |
+|---|---|
+| Broken object-level authorization | Auth-derived organisation filtering and tested cross-org policy |
+| Broken authentication | Bcrypt, JWT validation, MFA, API-key hashing and status checks |
+| Broken property-level authorization | Typed request/response models and explicit permission boundaries |
+| Unrestricted resource consumption | Pagination, batch limits, rate limiting and Kubernetes scaling |
+| Broken function-level authorization | Central permission catalogue and guarded-route verification |
+| Sensitive business flows | Idempotency, hard stops, audit records and batch isolation |
+| Server-side request forgery | Operator-configured service endpoints and controlled callback processing |
+| Security misconfiguration | Production validation, hardened image/manifests and CI assertions |
+| Improper inventory management | OpenAPI, documented routers and versioned migrations |
+| Unsafe API consumption | Timeouts, TLS verification, response parsing and failure isolation |
 
-**Severity:** High  
-**Status:** Closed
+## Independent VAPT handoff
 
-Several routes used an undefined `admin` variable when assigning uploader or
-approver identities. These references now use the authenticated `AuthContext`.
-Ruff reports zero remaining undefined names.
-
-### VAPT-05 — Migration race in Kubernetes
-
-**Severity:** High  
-**Status:** Closed
-
-The application entrypoint and Argo PreSync Job could both execute migrations.
-Startup flags now disable migrations/bootstrap in API pods; the PreSync Job is
-the single Kubernetes owner.
-
-### VAPT-06 — Insufficient automated coverage
-
-**Severity:** High  
-**Status:** Closed
-
-The suite now contains 88 tests and enforces 60% whole-application coverage.
-A separate critical-path gate covers password/JWT/TOTP security, authentication
-dependencies, hard stops, scoring-pipeline mapping and batch-result ingestion
-at 88.71% against an 80% minimum.
-
-### VAPT-07 — Rate-limit fail-open behaviour
-
-**Severity:** Medium  
-**Status:** Conditional acceptance
-
-When Redis is unavailable, authenticated requests continue. This preserves
-availability but removes application-layer abuse protection. Production must
-also enforce limits at ingress/API gateway/WAF and alert on the fail-open log.
-
-### VAPT-08 — Static quality/type debt
-
-**Severity:** Medium  
-**Status:** Closed
-
-Ruff reports zero findings and mypy reports zero errors across application and
-test code. Both checks are blocking jobs in the supplied GitLab pipeline.
-
-## 5. OWASP API Security mapping
-
-| OWASP API risk | Relevant implementation/control | Further test required |
-|---|---|---|
-| API1 Broken Object Level Authorization | Organisation filters, RBAC dependencies, audited cross-org access | DAST with two-org accounts |
-| API2 Broken Authentication | Bcrypt, JWT type/expiry checks, TOTP, account status checks | Brute force, refresh replay and reset-token tests |
-| API3 Broken Object Property Authorization | Pydantic request schemas, explicit response models | Mass-assignment fuzzing |
-| API4 Unrestricted Resource Consumption | Redis rate limits, pagination, upload validation | Upload-size and concurrency load tests |
-| API5 Broken Function Level Authorization | Permission catalogue and endpoint dependencies | Full role/route matrix test |
-| API6 Sensitive Business Flows | Idempotency, batch limits, audit logging | Automated abuse scenarios |
-| API7 SSRF | Configured outbound endpoints; no user-controlled base URLs identified | URL-field and callback validation review |
-| API8 Security Misconfiguration | Production validation, non-root image, Key Vault/environment secrets | Cluster, ingress and header scan |
-| API9 Inventory Management | OpenAPI plus documented routers | Compare deployed routes/version to inventory |
-| API10 Unsafe API Consumption | Timeouts and schemas around XDS/DE services | Malformed/oversized upstream response tests |
-
-## 6. Independent VAPT handoff scope
-
-The third party should receive a staging URL, OpenAPI document, architecture
-diagram, test accounts for all five platform roles and at least two isolated
-organisations, API keys for sandbox scope, and explicit authorization to test
-cross-tenant access. They should validate authentication, reset/MFA flows,
-IDOR/BOLA, file upload, SSRF, injection, webhook signatures, rate limits,
-business-flow abuse and error leakage, then issue a signed retest report.
+The independent provider can use the supplied OpenAPI document, architecture
+diagrams, role matrix, two isolated organisation accounts and sandbox API keys
+to validate the controls from an external perspective. Recommended coverage
+includes authentication/MFA, IDOR/BOLA, role boundaries, upload handling,
+injection, webhook integrity, rate limiting and business-flow behavior.

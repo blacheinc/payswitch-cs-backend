@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Grep-able reference for the most common failure modes. Pattern: **symptom → likely cause → fix**.
+Operator reference for common diagnostics. Pattern: **symptom → likely cause → recovery**.
 
 ---
 
@@ -122,22 +122,29 @@ az servicebus topic subscription dead-letter-queue-status-list \
 
 ## Migration-time
 
-### `alembic upgrade head` fails on deploy, app doesn't start
-The migration has a conflict with the current DB state. Inspect the error line in the Container App logs, then:
+### `alembic upgrade head` reports a schema conflict
+Preserve the deployment logs and compare the database's recorded revision with
+the release migration chain. Then:
 
 1. Run the migration locally against a DB snapshot.
-2. Fix the revision OR craft an out-of-band repair script.
-3. Redeploy.
+2. Prepare and peer-review a forward repair migration where required.
+3. Validate backup restore and migration execution in staging.
+4. Redeploy the immutable image after approval.
 
-If you need to ship hot and rollback-safe is more important than the new feature: revert the migration file, build a new image tag, and deploy that with `--skip-infra`.
+The Argo PreSync/Container Apps migration gate keeps the previous application
+revision serving until the schema step succeeds.
 
 ### `relation "<table>" already exists`
-Someone ran migrations manually and the Alembic version table is out of sync. Fix:
+This indicates schema history and the Alembic version record require
+reconciliation. Verify the table shape against the expected revision and take a
+database backup before applying an approved repair. Use `alembic stamp` only
+after confirming the complete target revision is already represented in the
+database; stamping does not execute schema changes.
 
 ```bash
-# Stamp the DB at the latest revision, then re-run head
-alembic stamp head
-alembic upgrade head
+# Inspect recorded and available revisions
+alembic current
+alembic history --verbose
 ```
 
 ---
