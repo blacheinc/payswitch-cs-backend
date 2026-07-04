@@ -1,6 +1,6 @@
 # Backend Internal QA Report
 
-- **Assessment date:** 30 June 2026
+- **Assessment date:** 4 July 2026
 - **Component:** PaySwitch Credit Scoring Backend API
 - **Result:** **Passed**
 
@@ -19,7 +19,7 @@ deployment behaviors expected from the delivered platform.
 | Whole-application coverage | 60.62% | Pass — 60% minimum |
 | Security/business-critical coverage | 88.75% | Pass — 80% minimum |
 | Ruff lint | Zero findings | Pass |
-| Ruff format verification | 125 files correctly formatted | Pass |
+| Ruff format verification | 126 files correctly formatted | Pass |
 | mypy | Zero errors across application and tests | Pass |
 | Python compilation | Successful | Pass |
 | Alembic migration topology | Single head `a9b0c1d2e3f4` | Pass |
@@ -27,7 +27,7 @@ deployment behaviors expected from the delivered platform.
 | Bandit static security scan | Zero findings | Pass |
 | Kubernetes base and overlay render | Successful | Pass |
 | Argo migration-policy verification | Successful | Pass |
-| Isolated end-to-end batch flow | Successful | Pass |
+| Containerized isolated end-to-end batch flow | Successful | Pass |
 
 ## Functional assurance coverage
 
@@ -49,8 +49,9 @@ The QA suite validates:
 
 ## End-to-end result
 
-The isolated acceptance runner provisions a temporary PostgreSQL database,
-applies the complete migration chain, seeds identities and RBAC, starts the API,
+The containerized acceptance runner builds the integration image, provisions
+isolated PostgreSQL and Redis services, applies the complete migration chain,
+seeds identities and RBAC, starts the API,
 authenticates an organisation administrator, submits a three-applicant batch and
 verifies terminal results. The scenario produced two successful scores and one
 controlled bureau no-match outcome, confirming both successful processing and

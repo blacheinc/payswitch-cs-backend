@@ -28,7 +28,9 @@ services:
       retries: 20
 
   api:
-    build: .
+    build:
+      context: .
+      target: integration
     ports:
       - "58000:8000"
     environment:

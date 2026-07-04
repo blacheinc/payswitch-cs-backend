@@ -1,6 +1,6 @@
 # Backend Verification Evidence
 
-- **Executed:** 30 June 2026
+- **Executed:** 4 July 2026
 - **Migration head:** `a9b0c1d2e3f4`
 - **Outcome:** **All handover gates passed**
 
@@ -13,7 +13,7 @@
 | Check | Recorded result |
 |---|---:|
 | Ruff lint | Zero findings |
-| Ruff formatting | 125 files correctly formatted |
+| Ruff formatting | 126 files correctly formatted |
 | mypy | Zero errors across 112 source/test files |
 | pytest | 88 passed |
 | Whole-application coverage | 60.62%; 60% required |
@@ -29,7 +29,7 @@
 project rather than a PyPI dependency; all resolved third-party packages are
 included in the audit.
 
-## Isolated end-to-end acceptance
+## Local isolated end-to-end acceptance
 
 ```bash
 ./scripts/run_handover_e2e_local.sh
@@ -52,10 +52,14 @@ The controlled no-match record demonstrates that an individual bureau outcome
 is isolated and reported without interrupting successful applicants in the same
 batch.
 
-The Docker-equivalent runner is:
+## Containerized isolated end-to-end acceptance
 
 ```bash
 ./scripts/run_handover_e2e.sh
 ```
 
-It is included as a GitLab deployment-validation job.
+The containerized runner built the dedicated integration image, started
+PostgreSQL, Redis and the API through Docker Compose, applied migrations, seeded
+RBAC/demo identities, passed health and readiness checks, and reproduced the
+same two-success/one-controlled-failure batch result. It completed successfully
+on 4 July 2026 and is included as a GitLab validation job.

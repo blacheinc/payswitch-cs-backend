@@ -1,6 +1,6 @@
 # Backend Security Assurance Register
 
-- **Verified:** 30 June 2026
+- **Verified:** 4 July 2026
 - **Status:** **All backend handover assurance gates passed**
 
 | Assurance area | Verification | Result |
@@ -16,7 +16,7 @@
 | Authorization | Role catalogue and tenant/cross-org tests | Passed |
 | Hard-stop controls | Seven policy rules | Passed 7/7 |
 | Secret sourcing | Key Vault precedence, fallback and caching tests | Passed |
-| Batch resilience | Mixed-outcome isolated E2E | Passed |
+| Batch resilience | Mixed-outcome local and containerized isolated E2E | Passed |
 | Database delivery | Complete Alembic chain and single head | Passed |
 | Container least privilege | Non-root runtime and hardened workload policy | Passed |
 | Kubernetes/Argo | Base/overlay render and PreSync assertions | Passed |
