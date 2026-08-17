@@ -52,6 +52,30 @@ async def test_redis_cache_operations() -> None:
     assert fake.closed and cache._client is None
 
 
+@pytest.mark.asyncio
+async def test_redis_socket_timeout_exceeds_batch_blocking_pop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.storage import cache as cache_module
+    from app.workers.batch_worker import POLL_TIMEOUT
+
+    captured: dict[str, Any] = {}
+    fake = FakeRedis()
+
+    def fake_from_url(url: str, **kwargs: Any) -> FakeRedis:
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(cache_module.settings, "redis_url", "redis://redis:6379/0")
+    monkeypatch.setattr(cache_module.redis, "from_url", fake_from_url)
+
+    client = await cache_module.RedisCache().get_client()
+
+    assert client is fake
+    assert captured["socket_connect_timeout"] == 5
+    assert captured["socket_timeout"] > POLL_TIMEOUT
+
+
 def test_email_console_resend_and_unknown_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services import email
 

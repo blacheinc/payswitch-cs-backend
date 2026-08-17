@@ -37,7 +37,9 @@ dependencies = [
     "bcrypt==3.2.2",
     "pyotp>=2.9.0",
     # Redis
-    "redis[hiredis]>=5.0.0",
+    # redis-py 8 changed blocking-read timeout defaults. Keep the tested 7.x
+    # contract until the 8.x behaviour is adopted deliberately.
+    "redis[hiredis]>=5.0.0,<8.0.0",
     # HTTP Client
     "httpx>=0.27.0",
     # Configuration

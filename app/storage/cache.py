@@ -15,6 +15,14 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# redis-py 8 changed its default socket read timeout from unlimited to five
+# seconds.  Batch workers issue BRPOP with a five-second server timeout, so
+# relying on that client default creates a race: the socket can time out just
+# before Redis returns the normal empty-queue response.  Keep connection
+# establishment strict, but allow blocking commands enough time to finish.
+REDIS_CONNECT_TIMEOUT_SECONDS = 5
+REDIS_SOCKET_TIMEOUT_SECONDS = 30
+
 
 class InMemoryRedis:
     """Small async Redis-compatible backend for isolated local/E2E runs.
@@ -130,7 +138,8 @@ class RedisCache:
                 self._client = redis.from_url(
                     settings.redis_url,
                     decode_responses=True,
-                    socket_connect_timeout=5,
+                    socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
+                    socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
                 )
         return self._client
 
