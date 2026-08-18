@@ -79,14 +79,34 @@ async def test_ingestion_subscriber_validation_and_update(monkeypatch: pytest.Mo
             "quality_score": 0.9,
             "transformed_file_path": "clean/file.csv",
             "features_mapped": 18,
-            "error_report": "warning",
+            "error_report": {
+                "user_message": "Readable warning",
+                "technical_summary": "Internal warning",
+            },
             "schema_template_id": str(template_id),
         }
     )
     assert upload.status == UploadStatus.TRANSFORMED
     assert upload.quality_report == {"ok": True}
+    assert upload.error_message == "Readable warning"
     assert upload.mapping_template_id == template_id
     assert upload.completed_at is not None
+
+    upload_with_named_template = SimpleNamespace(mapping_template_id=None)
+    named_template_session = FakeSession([upload_with_named_template])
+    monkeypatch.setattr(
+        ingestion,
+        "async_session_factory",
+        SessionFactory(named_template_session),
+    )
+    await ingestion.handle_data_ingested(
+        {
+            "training_upload_id": "u",
+            "status": "QUALIFIED",
+            "schema_template_id": "deterministic-xds-v1",
+        }
+    )
+    assert upload_with_named_template.mapping_template_id is None
 
 
 @pytest.mark.asyncio
