@@ -145,8 +145,10 @@ class Settings(BaseSettings):
     azure_servicebus_topic_score_applicant: str = "score-applicant"
     azure_servicebus_topic_batch_score_request: str = "batch-score-request"
     azure_servicebus_topic_batch_score_complete: str = "batch-score-complete"
+    azure_servicebus_topic_data_ingested: str = "data-ingested"
     azure_servicebus_sub_backend: str = "backend-sub"
     azure_servicebus_sub_cs_backend: str = "cs-backend"
+    azure_servicebus_sub_data_ingested: str = "backend-sub"
 
     # ── XDS Credit Bureau ────────────────────────────────────────────────────
     xds_username: str = ""

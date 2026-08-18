@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI):
 
     # Start subscribers
     from app.core.events import get_event_publisher
+    from app.subscribers.ingestion import handle_data_ingested
     from app.subscribers.scoring_complete import handle_scoring_complete
     from app.subscribers.training import handle_model_training_completed
     from app.subscribers.training_started import handle_model_training_started
@@ -89,6 +90,11 @@ async def lifespan(app: FastAPI):
         topic_name=settings.azure_servicebus_topic_scoring_complete,
         subscription_name=settings.azure_servicebus_sub_backend,
         handler=handle_scoring_complete,
+    )
+    event_publisher.subscribe(
+        topic_name=settings.azure_servicebus_topic_data_ingested,
+        subscription_name=settings.azure_servicebus_sub_data_ingested,
+        handler=handle_data_ingested,
     )
 
     # Start internal batch scoring workers (Redis queue consumers)
