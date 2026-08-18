@@ -6,6 +6,26 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0", False),
+        (0, False),
+        (False, False),
+        ("false", False),
+        ("", False),
+        ("1", True),
+        (1, True),
+        (True, True),
+        ("GHA-1", True),
+    ],
+)
+def test_bureau_feature_flag_parsing(value, expected) -> None:
+    from app.routers.score_requests import _feature_flag_enabled
+
+    assert _feature_flag_enabled(value) is expected
+
+
+@pytest.mark.parametrize(
     ("age", "confidence", "bureau", "expected"),
     [
         (17, 1.0, {}, {"HS-01"}),

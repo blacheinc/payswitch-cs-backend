@@ -69,6 +69,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/score-requests", tags=["Scoring API"])
 
 
+def _feature_flag_enabled(value: Any) -> bool:
+    """Interpret bureau flags without treating the string ``"0"`` as true."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    return normalized not in {"", "0", "false", "no", "none", "null"}
+
+
 def _scoring_result_response(result: ScoringResult | None) -> ScoringResultResponse | None:
     """Convert a persisted result and its JSON model payloads to the API schema."""
     if result is None:
@@ -769,7 +781,7 @@ async def create_score_request(
 
         # HS-04: Judgement
         if "total_judgements" not in bureau_data and _feats.has_judgement is not None:
-            if _feats.has_judgement:
+            if _feature_flag_enabled(_feats.has_judgement):
                 bureau_data["total_judgements"] = 1
 
         # HS-05: Written-off
@@ -786,7 +798,7 @@ async def create_score_request(
 
         # HS-03: Identity confidence fallback when XDS cache wasn't available
         if identity_confidence is None and _feats.identity_verified is not None:
-            if _feats.identity_verified:
+            if _feature_flag_enabled(_feats.identity_verified):
                 identity_confidence = 1.0
             elif body.applicant.national_id_number:
                 identity_confidence = 0.75
