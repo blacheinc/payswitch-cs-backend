@@ -160,10 +160,10 @@ def build_de_payload(tracking_id: str, raw_xds_data: dict[str, Any]) -> dict[str
 
 
 async def fire_de_inference(tracking_id: str, de_payload: dict[str, Any]) -> None:
-    """POST the scoring payload to the DE inference endpoint (fire-and-forget).
+    """POST the scoring payload to the DE inference endpoint.
 
-    Errors are logged but not re-raised — the caller is responsible for
-    handling the ScoreRequest status if this fails.
+    Raises when the endpoint cannot accept the request so callers can move
+    persisted work out of ``processing`` instead of leaving it stuck there.
     """
     import httpx
 
@@ -185,6 +185,52 @@ async def fire_de_inference(tracking_id: str, de_payload: dict[str, Any]) -> Non
                     resp.status_code,
                     resp.text,
                 )
+                detail = resp.text[:500] if resp.text else "empty response"
+                raise RuntimeError(
+                    f"DE inference rejected {tracking_id} with HTTP "
+                    f"{resp.status_code}: {detail}"
+                )
     except Exception as e:
         logger.error("[pipeline] DE inference call threw exception: %s", e)
         raise
+
+
+async def mark_score_request_failed(tracking_id: str, error: str) -> None:
+    """Persist an asynchronous inference-dispatch failure safely."""
+    from sqlalchemy import select
+
+    from app.db import async_session_factory
+    from app.db.base import utcnow
+    from app.models.score_request import ScoreRequest, ScoreRequestStatus
+    from app.models.scoring_result import ScoringDecision, ScoringResult
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(ScoreRequest)
+            .where(ScoreRequest.tracking_id == tracking_id)
+            .with_for_update()
+        )
+        score_request = result.scalar_one_or_none()
+        if score_request is None or score_request.status == ScoreRequestStatus.COMPLETED:
+            return
+
+        score_request.status = ScoreRequestStatus.FAILED
+        score_request.scored_at = utcnow()
+
+        existing = await db.execute(
+            select(ScoringResult).where(ScoringResult.request_id == tracking_id)
+        )
+        if existing.scalar_one_or_none() is None:
+            db.add(
+                ScoringResult(
+                    request_id=tracking_id,
+                    score_request_id=score_request.id,
+                    scoring_timestamp=utcnow(),
+                    decision=ScoringDecision.ERROR,
+                    condition_applied=[],
+                    scoring_metadata=None,
+                    errors=[error[:1000]],
+                )
+            )
+
+        await db.commit()

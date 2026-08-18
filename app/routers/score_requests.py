@@ -892,10 +892,6 @@ async def create_score_request(
     # so _raw_xds_data is already patched with frontend feature overrides.
 
     try:
-        from app.config import get_settings
-
-        settings = get_settings()
-
         de_payload = {
             "request_id": tracking_id,
             "data_source_id": tracking_id,
@@ -911,27 +907,20 @@ async def create_score_request(
             },
         }
 
-        # Publish to the DE Azure Function to trigger inferencing
+        # Publish to the DE Azure Function to trigger inferencing.  This runs
+        # after the response is returned, so it must use its own DB session if
+        # dispatch fails.
         async def _publish_to_de_inference(payload: dict):
-            import httpx
+            from app.services.scoring_pipeline import (
+                fire_de_inference,
+                mark_score_request_failed,
+            )
 
-            url = settings.de_inference_url
-            if settings.de_inference_code:
-                url = f"{url}?code={settings.de_inference_code}"
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(url, json=payload)
-                    if resp.status_code in (200, 201, 202):
-                        logger.info(
-                            "[scoring] Published score request %s to DE inference function",
-                            tracking_id,
-                        )
-                    else:
-                        logger.error(
-                            f"[scoring] DE inference call failed ({resp.status_code}): {resp.text}"
-                        )
+                await fire_de_inference(tracking_id, payload)
             except Exception as inner_e:
                 logger.error(f"[scoring] DE inference call threw exception: {inner_e}")
+                await mark_score_request_failed(tracking_id, str(inner_e))
 
         # Fire and forget
         asyncio.create_task(_publish_to_de_inference(de_payload))

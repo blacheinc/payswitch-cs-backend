@@ -205,7 +205,8 @@ async def test_fire_de_inference_success_failure_and_exception(
     monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
     await scoring_pipeline.fire_de_inference("SCR-1", {"x": 1})
     FakeAsyncClient.response = httpx.Response(500, text="bad")
-    await scoring_pipeline.fire_de_inference("SCR-2", {"x": 2})
+    with pytest.raises(RuntimeError, match="HTTP 500: bad"):
+        await scoring_pipeline.fire_de_inference("SCR-2", {"x": 2})
     FakeAsyncClient.exception = RuntimeError("network")
     with pytest.raises(RuntimeError, match="network"):
         await scoring_pipeline.fire_de_inference("SCR-3", {"x": 3})
