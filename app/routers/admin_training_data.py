@@ -151,6 +151,9 @@ async def upload_training_data(
             message={
                 "training_upload_id": str(upload.id),
                 "data_source_id": str(source.id),
+                # Required by the Azure Service Bus subscription filters for
+                # the ingestion Function and ADF trigger.
+                "processing_system": "ADF",
                 "file_format": ext,
                 "file_size_bytes": len(file_bytes),
                 "raw_file_path": raw_path,
