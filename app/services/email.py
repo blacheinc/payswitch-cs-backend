@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlparse
 
 import resend
 
@@ -66,9 +67,53 @@ class EmailService:
         base = (self.settings.dashboard_base_url or "").rstrip("/")
         return f"{base}{path}" if base else path
 
+
+    def _safe_callback(self, callback_url: str | None, purpose: str) -> str | None:
+        """Return ``callback_url`` only if it points at a trusted front-end.
+
+        A client-supplied callback is embedded in a link we email from our own
+        sender, so an unvalidated value lets an attacker have us deliver a
+        trustworthy-looking message pointing at their server — and, for password
+        reset, hand them a live token. Anything that fails validation is dropped
+        and the caller falls back to the configured dashboard link.
+
+        Rejects rather than sanitizes: no suffix matching (``evil-payswitch.com``
+        must not pass for ``payswitch.com``), and no userinfo in the netloc
+        (``https://trusted.com@evil.com`` resolves to ``evil.com``).
+        """
+        if not callback_url:
+            return None
+
+        try:
+            parsed = urlparse(callback_url)
+        except ValueError:
+            parsed = None
+
+        reason = None
+        if parsed is None:
+            reason = "unparseable"
+        elif parsed.username or parsed.password:
+            reason = "embedded credentials"
+        elif parsed.scheme not in ("http", "https"):
+            reason = f"scheme {parsed.scheme!r}"
+        elif parsed.scheme == "http" and (parsed.hostname or "") not in ("localhost", "127.0.0.1"):
+            reason = "plaintext http"
+        elif (parsed.hostname or "").lower() not in self.settings.trusted_callback_hosts():
+            reason = "host not allow-listed"
+
+        if reason:
+            # Logged so an operator can spot targeted abuse; see VAPT finding 2.
+            logger.warning(
+                "[email] Rejected %s callback_url (%s): %s", purpose, reason, callback_url
+            )
+            return None
+
+        return callback_url
+
     def send_password_reset_email(self, to_email: str, token: str, callback_url: str | None = None):
-        if callback_url:
-            link = f"{callback_url}?token={token}"
+        safe = self._safe_callback(callback_url, "password-reset")
+        if safe:
+            link = f"{safe}?token={token}"
         else:
             link = f"{self._dashboard_link('/reset-password')}?token={token}"
 
@@ -82,7 +127,7 @@ class EmailService:
         return self.send_email(to_email, subject, html)
 
     def send_invite_email(self, to_email: str, temp_password: str, callback_url: str | None = None):
-        link = callback_url or self._dashboard_link("/login")
+        link = self._safe_callback(callback_url, "invite") or self._dashboard_link("/login")
 
         subject = "You have been invited to PaySwitch Credit Scoring"
         html = f"""
@@ -96,7 +141,7 @@ class EmailService:
     def send_provision_email(
         self, to_email: str, temp_password: str, callback_url: str | None = None
     ):
-        link = callback_url or self._dashboard_link("/setup")
+        link = self._safe_callback(callback_url, "provision") or self._dashboard_link("/setup")
 
         subject = "Your PaySwitch Organization is Ready"
         html = f"""

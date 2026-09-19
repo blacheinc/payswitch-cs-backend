@@ -1,7 +1,8 @@
 """Regression tests for the VAPT auth findings.
 
-Covers the 2FA enrollment lockout (report finding 4) and the missing rate
-limiting on login / forgot-password (findings 1 and 5).
+Covers the 2FA enrollment lockout (finding 4), the missing rate limiting on
+login / forgot-password (findings 1 and 5), and the unvalidated ``callback_url``
+in emailed links (finding 2).
 """
 
 from __future__ import annotations
@@ -138,3 +139,71 @@ def test_forgot_password_response_is_identical_when_throttled() -> None:
     # Exactly two returns, both the shared constant — no literal that could drift.
     assert forgot.count("return SuccessResponse(message=_RESET_SENT_MESSAGE)") == 2
     assert 'SuccessResponse(message="If that email' not in forgot
+
+
+# ── Finding 2: callback_url must be allow-listed before it reaches an email ──
+
+
+def _email_service_with_hosts():
+    from app.config import Settings
+    from app.services.email import EmailService
+
+    svc = EmailService()
+    svc.settings = Settings(
+        allowed_origins=["https://payswitch-cs.vercel.app", "http://localhost:3000"],
+        dashboard_base_url="https://payswitch-cs.vercel.app",
+    )
+    return svc
+
+
+def test_trusted_hosts_are_derived_from_existing_config() -> None:
+    """A correctly configured deployment needs no extra setting."""
+    svc = _email_service_with_hosts()
+    assert svc.settings.trusted_callback_hosts() == {"payswitch-cs.vercel.app", "localhost"}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://simar.space/",  # the attacker domain from the report's PoC
+        "https://payswitch-cs.vercel.app.evil.com/x",  # suffix-append
+        "https://evil-payswitch-cs.vercel.app/x",  # prefix-append
+        "https://payswitch-cs.vercel.app@evil.com/x",  # userinfo resolves to evil.com
+        "http://payswitch-cs.vercel.app/x",  # downgrade to plaintext
+        "javascript:alert(1)",
+        "//evil.com/x",  # scheme-relative
+        "",
+        None,
+    ],
+)
+def test_untrusted_callback_urls_are_rejected(url: str | None) -> None:
+    assert _email_service_with_hosts()._safe_callback(url, "test") is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://payswitch-cs.vercel.app/reset-password",
+        "http://localhost:3000/reset-password",  # http allowed only for loopback
+    ],
+)
+def test_trusted_callback_urls_are_accepted(url: str) -> None:
+    assert _email_service_with_hosts()._safe_callback(url, "test") == url
+
+
+def test_every_callback_consuming_email_is_validated() -> None:
+    """All three builders must go through the check, not just password reset.
+
+    The report only flagged forgot-password, but invite and provision embed the
+    same client-supplied value into links sent from our own sender.
+    """
+    from pathlib import Path
+
+    source = Path("app/services/email.py").read_text(encoding="utf-8")
+
+    for builder in ("send_password_reset_email", "send_invite_email", "send_provision_email"):
+        block = source.split(f"def {builder}(")[1].split("\n    def ")[0]
+        assert "_safe_callback" in block, f"{builder} does not validate callback_url"
+        # The raw value must never reach the link directly.
+        assert "link = callback_url" not in block
+        assert "{callback_url}" not in block

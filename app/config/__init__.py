@@ -67,12 +67,38 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/v1"
     allowed_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
-    @field_validator("allowed_origins", mode="before")
+    # Extra hostnames accepted in a client-supplied ``callback_url`` on emailed
+    # links. The hosts behind ``allowed_origins`` and ``dashboard_base_url`` are
+    # always trusted; set this only for front-ends that are neither.
+    callback_allowed_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("allowed_origins", "callback_allowed_hosts", mode="before")
     @classmethod
     def parse_origins(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
+
+    def trusted_callback_hosts(self) -> set[str]:
+        """Hostnames a ``callback_url`` may point at.
+
+        Derived from what the deployment already declares as its own front-ends,
+        so a correctly configured environment needs no extra setting.
+        """
+        from urllib.parse import urlparse
+
+        hosts: set[str] = set()
+        for raw in [*self.allowed_origins, self.dashboard_base_url or ""]:
+            if not raw:
+                continue
+            host = urlparse(raw if "//" in raw else f"//{raw}").hostname
+            if host:
+                hosts.add(host.lower())
+        for raw in self.callback_allowed_hosts:
+            host = urlparse(raw if "//" in raw else f"//{raw}").hostname
+            if host:
+                hosts.add(host.lower())
+        return hosts
 
     # ── Server ───────────────────────────────────────────────────────────────
     # Container ingress requires all-interface binding; network exposure is
