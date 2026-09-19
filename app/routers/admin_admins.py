@@ -190,6 +190,7 @@ async def invite_admin(
         email=body.email,
         name=body.name,
         password_hash=hash_password(temp_password),
+        must_change_password=True,
         role=legacy_role,
         status=AdminUserStatus.ACTIVE,
     )

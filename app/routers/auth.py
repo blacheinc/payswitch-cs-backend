@@ -22,6 +22,7 @@ from app.core.security import (
     generate_totp_secret,
     get_totp_uri,
     hash_password,
+    validate_password_strength,
     verify_password,
     verify_totp,
 )
@@ -30,8 +31,8 @@ from app.db.base import utcnow
 from app.dependencies import (
     AuthContext,
     get_auth_context,
-    get_current_org_user,
     get_current_user,
+    get_user_pending_password_change,
 )
 from app.models.user import AdminUser, AdminUserStatus, OrgUser, OrgUserStatus
 from app.schemas.auth import (
@@ -42,6 +43,7 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     Remove2FARequest,
     ResetPasswordRequest,
+    Setup2FARequest,
     Setup2FAResponse,
     TokenResponse,
     UserPermissionsResponse,
@@ -220,6 +222,22 @@ async def login(
                 user=admin_user_data,
             )
 
+        if admin.must_change_password:
+            # Scoped token: get_current_user accepts it, but require_password_changed
+            # rejects it everywhere except /auth/change-password. The emailed
+            # credential therefore cannot be used to reach any real functionality.
+            return LoginResponse(
+                access_token=create_access_token(
+                    admin.id,
+                    extra_claims={"user_type": "admin", "pwd_change_required": True},
+                ),
+                refresh_token="",  # nosec B106
+                expires_in=600,
+                requires_password_change=True,
+                user_type="admin",
+                user=admin_user_data,
+            )
+
         access_token = create_access_token(
             admin.id, extra_claims={"user_type": "admin", "role": admin.role.value}
         )
@@ -272,6 +290,22 @@ async def login(
                 refresh_token="",  # nosec B106
                 expires_in=300,
                 requires_2fa=True,
+                user_type="org_user",
+                user=org_user_data,
+            )
+
+        if org_user.must_change_password:
+            # Scoped token: get_current_user accepts it, but require_password_changed
+            # rejects it everywhere except /auth/change-password. The emailed
+            # credential therefore cannot be used to reach any real functionality.
+            return LoginResponse(
+                access_token=create_access_token(
+                    org_user.id,
+                    extra_claims={"user_type": "org_user", "pwd_change_required": True},
+                ),
+                refresh_token="",  # nosec B106
+                expires_in=600,
+                requires_password_change=True,
                 user_type="org_user",
                 user=org_user_data,
             )
@@ -410,6 +444,10 @@ async def reset_password(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Reset password using a reset token (must not be expired)."""
+    # Before the token lookup: a weak password must be rejected regardless of
+    # whether the token turns out to be valid, and the API is reachable without
+    # the UI's strength meter.
+    validate_password_strength(body.new_password)
     now = utcnow()
 
     # Check org users first
@@ -462,8 +500,33 @@ async def verify_email(
 async def setup_2fa(
     current_user: Annotated[AdminUser | OrgUser, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    body: Setup2FARequest | None = None,
 ) -> Setup2FAResponse:
-    """Generate TOTP secret for 2FA setup (admin or org user)."""
+    """Generate TOTP secret for 2FA setup (admin or org user).
+
+    When 2FA is already active, replacing the secret requires proving control of
+    the *current* factor first. Without that, anyone holding a live session — a
+    stolen cookie, an unattended device — could silently rebind 2FA to their own
+    authenticator and keep access across the owner's password reset
+    (VAPT finding 3).
+    """
+    if current_user.totp_enabled:
+        body = body or Setup2FARequest()
+        reauthenticated = False
+        if body.code and current_user.totp_secret:
+            reauthenticated = verify_totp(current_user.totp_secret, body.code)
+        if not reauthenticated and body.password:
+            reauthenticated = verify_password(body.password, current_user.password_hash)
+        if not reauthenticated:
+            logger.warning(
+                "[2fa] Rejected re-enrollment without re-authentication for %s",
+                current_user.email,
+            )
+            raise AuthenticationError(
+                "Two-factor authentication is already enabled. "
+                "Provide your current authenticator code or password to replace it."
+            )
+
     secret = generate_totp_secret()
     uri = get_totp_uri(secret, current_user.email)
 
@@ -584,16 +647,29 @@ async def remove_2fa(
 @router.post("/change-password", response_model=SuccessResponse)
 async def change_password(
     body: ChangePasswordRequest,
-    current_user: Annotated[OrgUser, Depends(get_current_org_user)],
+    current_user: Annotated[
+        AdminUser | OrgUser, Depends(get_user_pending_password_change)
+    ],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
-    """Change own password (authenticated users)."""
-    result = await db.execute(select(OrgUser).where(OrgUser.id == current_user.id))
+    """Change own password (admin or org user).
+
+    Accepts a password-change-scoped token so an account flagged with
+    ``must_change_password`` can clear the flag — it is locked out of every other
+    route until it does. Previously org-only, which would have stranded any
+    flagged admin.
+    """
+    model = AdminUser if isinstance(current_user, AdminUser) else OrgUser
+    result = await db.execute(select(model).where(model.id == current_user.id))
     user = result.scalar_one()
 
     if not verify_password(body.current_password, user.password_hash):
         raise AuthenticationError("Current password is incorrect")
 
+    validate_password_strength(body.new_password)
     user.password_hash = hash_password(body.new_password)
+    # Clears any forced-change flag set when the account was issued a
+    # system-generated password (VAPT finding 6).
+    user.must_change_password = False
 
     return SuccessResponse(message="Password changed successfully")

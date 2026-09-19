@@ -147,6 +147,13 @@ async def get_current_user(
     if payload.get("type") != "access":
         raise AuthenticationError("Invalid token type")
 
+    # A token minted for an account that still holds a system-generated password
+    # is scoped to the change-password flow only. Rejecting it here covers every
+    # endpoint at once, so the emailed credential cannot reach real functionality
+    # (VAPT finding 6). /auth/change-password uses get_user_pending_password_change.
+    if payload.get("pwd_change_required"):
+        raise AuthenticationError("Password change required before continuing")
+
     user_type = payload.get("user_type")
     user_id = payload.get("sub")
     if not user_id:
@@ -269,6 +276,46 @@ async def get_auth_context(
         )
 
     raise AuthenticationError("Invalid or expired token / API key")
+
+
+
+async def get_user_pending_password_change(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(optional_bearer)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> AdminUser | OrgUser:
+    """Resolve a user from a normal *or* a password-change-scoped token.
+
+    Only /auth/change-password uses this. It is the one route that must remain
+    reachable while ``must_change_password`` is set, otherwise a flagged account
+    has no way to clear the flag.
+    """
+    if credentials is None:
+        raise AuthenticationError("Authorization header required")
+
+    try:
+        payload = decode_token(credentials.credentials)
+    except Exception:
+        raise AuthenticationError("Invalid or expired token")
+
+    if payload.get("type") != "access":
+        raise AuthenticationError("Invalid token type")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise AuthenticationError("Invalid token payload")
+
+    if payload.get("user_type") == "admin":
+        result = await db.execute(select(AdminUser).where(AdminUser.id == user_id))
+        admin = result.scalar_one_or_none()
+        if admin is None or admin.status != AdminUserStatus.ACTIVE:
+            raise AuthenticationError("User not found or deactivated")
+        return admin
+
+    result = await db.execute(select(OrgUser).where(OrgUser.id == user_id))
+    org_user = result.scalar_one_or_none()
+    if org_user is None or org_user.status != OrgUserStatus.ACTIVE:
+        raise AuthenticationError("User not found or deactivated")
+    return org_user
 
 
 # ── Rate Limiting Dependency ──────────────────────────────────────────────────

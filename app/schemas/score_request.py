@@ -6,8 +6,9 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_serializer, model_validator
 
+from app.core.masking import mask_national_id, mask_phone
 from app.schemas.bureau_schemas import (
     BureauCreditAccount,
     BureauCreditSummary,
@@ -36,13 +37,32 @@ class LoanRequestInfo(BaseModel):
 
 
 class ApplicantSummary(BaseModel):
-    """Lightweight applicant info returned in score responses."""
+    """Lightweight applicant info returned in score responses.
+
+    Identifiers are masked on serialization (VAPT finding 9). This is a response
+    schema only — ``ApplicantInfo`` carries the full values inbound, and storage
+    and scoring are untouched. Masking here rather than per-route means no
+    response path can leak a full identifier by omission, including the
+    platform-admin score-request detail view the pentest flagged.
+    """
 
     full_name: str | None = None
     date_of_birth: str | None = None
     national_id_number: str | None = None
     phone: str | None = None
     account_number: str | None = None
+
+    @field_serializer("national_id_number")
+    def _mask_national_id(self, value: str | None) -> str | None:
+        return mask_national_id(value)
+
+    @field_serializer("phone")
+    def _mask_phone(self, value: str | None) -> str | None:
+        return mask_phone(value)
+
+    @field_serializer("account_number")
+    def _mask_account_number(self, value: str | None) -> str | None:
+        return mask_national_id(value)
 
 
 class LoanRequestSummary(BaseModel):

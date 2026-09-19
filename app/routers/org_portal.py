@@ -145,6 +145,7 @@ async def invite_user(
             existing_user.organization_id = organization_id
             existing_user.name = body.name
             existing_user.password_hash = hash_password(temp_password)
+            existing_user.must_change_password = True
             existing_user.role_label = _coerce_role_label(body.role_label)
             existing_user.email_verification_token = generate_email_verification_token()
             await db.flush()
@@ -179,6 +180,7 @@ async def invite_user(
         existing_user.organization_id = organization_id
         existing_user.name = body.name
         existing_user.password_hash = hash_password(temp_password)
+        existing_user.must_change_password = True
         existing_user.role_label = _coerce_role_label(body.role_label)
         existing_user.status = OrgUserStatus.ACTIVE
         existing_user.email_verification_token = generate_email_verification_token()
@@ -216,6 +218,7 @@ async def invite_user(
         email=body.email,
         name=body.name,
         password_hash=hash_password(temp_password),
+        must_change_password=True,
         role_label=_coerce_role_label(body.role_label),
         status=OrgUserStatus.ACTIVE,
         email_verification_token=generate_email_verification_token(),

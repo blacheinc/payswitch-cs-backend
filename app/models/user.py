@@ -54,6 +54,9 @@ class AdminUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_reset_token: Mapped[str | None] = mapped_column(String(64))
     password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the account is issued a system-generated password; login
+    # refuses to hand out a full token until it is cleared (VAPT finding 6).
+    must_change_password: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     def __repr__(self) -> str:
         return f"<AdminUser {self.email} ({self.role.value})>"
@@ -110,6 +113,9 @@ class OrgUser(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     email_verification_token: Mapped[str | None] = mapped_column(String(64))
     password_reset_token: Mapped[str | None] = mapped_column(String(64))
     password_reset_expires: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the account is issued a system-generated password; login
+    # refuses to hand out a full token until it is cleared (VAPT finding 6).
+    must_change_password: Mapped[bool] = mapped_column(default=False, nullable=False)
 
     # Relationships
     organization: Mapped[Organization] = relationship(back_populates="users")

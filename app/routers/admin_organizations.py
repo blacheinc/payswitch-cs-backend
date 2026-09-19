@@ -232,6 +232,7 @@ async def provision_organization(
         existing_org_user.organization_id = org.id
         existing_org_user.name = org.primary_contact_name or f"{org.name} Admin"
         existing_org_user.password_hash = hash_password(temp_password)
+        existing_org_user.must_change_password = True
         existing_org_user.role_label = OrgRoleLabel.ADMIN
         existing_org_user.status = OrgUserStatus.ACTIVE
         existing_org_user.email_verification_token = generate_email_verification_token()
@@ -244,6 +245,7 @@ async def provision_organization(
             email=org.primary_contact_email,
             name=org.primary_contact_name or f"{org.name} Admin",
             password_hash=hash_password(temp_password),
+            must_change_password=True,
             role_label=OrgRoleLabel.ADMIN,
             status=OrgUserStatus.ACTIVE,
             email_verification_token=generate_email_verification_token(),

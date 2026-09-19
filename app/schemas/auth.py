@@ -16,6 +16,9 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     requires_2fa: bool = False
+    # True when the account still holds a system-generated password. The token
+    # issued alongside it only permits /auth/change-password.
+    requires_password_change: bool = False
     user_type: str  # "admin" or "org_user"
     user: dict | None = None
 
@@ -47,6 +50,17 @@ class ChangePasswordRequest(BaseModel):
 
 class VerifyEmailRequest(BaseModel):
     token: str
+
+
+class Setup2FARequest(BaseModel):
+    """Re-authentication for 2FA (re-)enrollment.
+
+    Only required when the account already has 2FA active — proving control of
+    the current factor before it can be replaced (VAPT finding 3).
+    """
+
+    password: str | None = None
+    code: str | None = None
 
 
 class Setup2FAResponse(BaseModel):

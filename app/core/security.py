@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import string
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -153,10 +154,81 @@ def verify_webhook_signature(payload: str | bytes, signature: str, secret: str) 
 
 
 def generate_temp_password() -> str:
-    """Generate a temporary password for new accounts."""
-    return secrets.token_urlsafe(16)
+    """Generate a temporary password for new accounts.
+
+    Must satisfy ``validate_password_strength`` so a system-generated credential
+    can never be weaker than one a user is allowed to choose.
+    """
+    alphabet = string.ascii_letters + string.digits
+    while True:
+        body = "".join(secrets.choice(alphabet) for _ in range(20))
+        candidate = body + secrets.choice("!@#$%^&*")
+        try:
+            validate_password_strength(candidate)
+        except Exception:  # noqa: BLE001 — regenerate until it satisfies the policy
+            continue
+        return candidate
 
 
 def generate_email_verification_token() -> str:
     """Generate a token for email verification / password reset."""
     return secrets.token_urlsafe(32)
+
+
+# ── Password policy (VAPT finding 7) ─────────────────────────────────────────
+
+MIN_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 128
+
+# Passwords seen repeatedly in credential-stuffing lists. Not a substitute for a
+# real breached-password check (HaveIBeenPwned's range API is the eventual fix),
+# but it cheaply rejects what automated attacks actually try first.
+_COMMON_PASSWORDS = frozenset(
+    {
+        "password", "password1", "password123", "passw0rd", "p@ssw0rd",
+        "12345678", "123456789", "1234567890", "qwerty123", "qwertyuiop",
+        "letmein", "welcome1", "admin123", "administrator", "iloveyou",
+        "monkey123", "football", "baseball", "sunshine", "princess",
+        "dragon123", "abc12345", "changeme", "trustno1", "starwars",
+    }
+)
+
+
+def validate_password_strength(password: str) -> None:
+    """Raise ``ValidationError`` unless ``password`` meets the server-side policy.
+
+    Client-side strength meters are a UX affordance only: the API is reachable
+    directly, so every path that sets a password must call this. Collects all
+    failures so the caller fixes them in one round trip rather than discovering
+    them one at a time.
+    """
+    from app.core.exceptions import ValidationError
+
+    problems: list[str] = []
+
+    if len(password) < MIN_PASSWORD_LENGTH:
+        problems.append(f"be at least {MIN_PASSWORD_LENGTH} characters")
+    if len(password) > MAX_PASSWORD_LENGTH:
+        problems.append(f"be at most {MAX_PASSWORD_LENGTH} characters")
+    if not any(c.islower() for c in password):
+        problems.append("contain a lowercase letter")
+    if not any(c.isupper() for c in password):
+        problems.append("contain an uppercase letter")
+    if not any(c.isdigit() for c in password):
+        problems.append("contain a digit")
+    if not any(not c.isalnum() for c in password):
+        problems.append("contain a symbol")
+
+    stripped = password.strip().lower()
+    if stripped in _COMMON_PASSWORDS:
+        problems.append("not be a commonly used password")
+    # "12345678", "aaaaaaaa" and friends pass the class checks only by accident;
+    # reject anything with no character variety at all.
+    elif len(set(stripped)) < 5:
+        problems.append("use a wider variety of characters")
+
+    if problems:
+        raise ValidationError(
+            "Password must " + "; ".join(problems),
+            details={"requirements": problems},
+        )

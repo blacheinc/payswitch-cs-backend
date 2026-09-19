@@ -1,8 +1,10 @@
 """Regression tests for the VAPT auth findings.
 
-Covers the 2FA enrollment lockout (finding 4), the missing rate limiting on
-login / forgot-password (findings 1 and 5), and the unvalidated ``callback_url``
-in emailed links (finding 2).
+Covers every backend finding in the report: the 2FA enrollment lockout (4), the
+missing rate limiting on login / forgot-password (1 and 5), the unvalidated
+``callback_url`` in emailed links (2), 2FA re-enrollment without re-auth (3),
+unforced password change on emailed credentials (6), the absent server-side
+password policy (7), and unmasked PII in responses (9).
 """
 
 from __future__ import annotations
@@ -207,3 +209,158 @@ def test_every_callback_consuming_email_is_validated() -> None:
         # The raw value must never reach the link directly.
         assert "link = callback_url" not in block
         assert "{callback_url}" not in block
+
+
+# ── Finding 3: replacing an active 2FA secret needs the current factor ───────
+
+
+def test_2fa_setup_requires_reauth_when_already_enabled() -> None:
+    source = _login_gate_source()
+    setup = source.split('@router.post("/2fa/setup"')[1].split("@router.post")[0]
+
+    assert "current_user.totp_enabled" in setup, "setup does not branch on existing 2FA"
+    assert "verify_totp(" in setup, "current TOTP code is not accepted as re-auth"
+    assert "verify_password(" in setup, "current password is not accepted as re-auth"
+    assert "AuthenticationError" in setup, "re-enrollment is not refused without re-auth"
+    # The secret must only be minted after the re-auth branch.
+    assert setup.index("current_user.totp_enabled") < setup.index("generate_totp_secret()")
+
+
+# ── Finding 6: emailed credentials must not survive first login ──────────────
+
+
+def test_temp_password_issuers_flag_the_account() -> None:
+    """Every route that emails a generated password must set the flag."""
+    from pathlib import Path
+
+    for name in ("admin_admins", "admin_organizations", "org_portal"):
+        src = Path(f"app/routers/{name}.py").read_text(encoding="utf-8")
+        if "generate_temp_password()" not in src:
+            continue
+        assert src.count("must_change_password") >= src.count("generate_temp_password()"), (
+            f"{name}: a temp password is issued without flagging the account"
+        )
+
+
+def test_login_withholds_a_usable_session_until_the_password_changes() -> None:
+    source = _login_gate_source()
+    login = source.split('@router.post("/login"')[1].split("@router.post")[0]
+
+    assert login.count("must_change_password") == 2, "gate missing on one of the two branches"
+    assert login.count("pwd_change_required") == 2
+    # No refresh token, so the scoped session cannot be extended.
+    assert login.count('refresh_token=""') >= 2
+
+
+def test_scoped_token_is_rejected_everywhere_but_change_password() -> None:
+    from pathlib import Path
+
+    deps = Path("app/dependencies.py").read_text(encoding="utf-8")
+    guard = deps.split("async def get_current_user(")[1].split("\nasync def ")[0]
+    assert 'payload.get("pwd_change_required")' in guard, (
+        "the scoped token is not rejected by the shared auth dependency"
+    )
+    # ...but the one route that clears the flag must still accept it.
+    assert "async def get_user_pending_password_change(" in deps
+
+    source = _login_gate_source()
+    change = source.split('@router.post("/change-password"')[1].split("@router.post")[0]
+    assert "get_user_pending_password_change" in change
+    assert "must_change_password = False" in change, "the flag is never cleared"
+
+
+def test_change_password_covers_admins_too() -> None:
+    """An admin issued a temp password must be able to clear its own flag."""
+    source = _login_gate_source()
+    change = source.split('@router.post("/change-password"')[1].split("@router.post")[0]
+    assert "AdminUser" in change, "change-password is org-only; flagged admins would be stranded"
+
+
+# ── Finding 7: the server enforces the password policy ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "12345678",  # the weak value accepted in the report's PoC
+        "password",
+        "Passw0rd!",  # good classes, too short
+        "aaaaaaaaaaaaA1!",  # long enough, no character variety
+        "short1!A",
+        "",
+    ],
+)
+def test_weak_passwords_are_rejected(password: str) -> None:
+    from app.core.exceptions import ValidationError
+    from app.core.security import validate_password_strength
+
+    with pytest.raises(ValidationError):
+        validate_password_strength(password)
+
+
+def test_strong_password_is_accepted() -> None:
+    from app.core.security import validate_password_strength
+
+    validate_password_strength("Str0ng&Passphrase99")
+
+
+def test_generated_temp_passwords_satisfy_the_policy() -> None:
+    """A system-issued credential must never be weaker than a user-chosen one."""
+    from app.core.security import generate_temp_password, validate_password_strength
+
+    for _ in range(25):
+        validate_password_strength(generate_temp_password())
+
+
+def test_password_setting_routes_validate() -> None:
+    source = _login_gate_source()
+    for route in ("/reset-password", "/change-password"):
+        block = source.split(f'@router.post("{route}"')[1].split("@router.post")[0]
+        assert "validate_password_strength(" in block, f"{route} does not enforce the policy"
+
+
+# ── Finding 9: identifiers are masked on the way out ─────────────────────────
+
+
+def test_masking_keeps_only_a_short_tail() -> None:
+    from app.core.masking import mask_national_id, mask_phone
+
+    assert mask_national_id("GHA-2342344234-3") == "\u2022" * 12 + "34-3"
+    assert mask_phone("+233904887364") == "\u2022" * 10 + "364"
+
+
+def test_short_values_are_masked_entirely() -> None:
+    """A tail longer than the value would defeat the point."""
+    from app.core.masking import mask_national_id
+
+    assert set(mask_national_id("1234") or "") == {"\u2022"}
+    assert mask_national_id(None) is None
+
+
+def test_applicant_summary_masks_on_serialization() -> None:
+    from app.schemas.score_request import ApplicantSummary
+
+    dumped = ApplicantSummary(
+        full_name="Ama Mensah",
+        national_id_number="GHA-2342344234-3",
+        phone="+233904887364",
+        account_number="0123456789",
+    ).model_dump()
+
+    assert dumped["full_name"] == "Ama Mensah", "name is not an identifier; leave it alone"
+    for field in ("national_id_number", "phone", "account_number"):
+        assert "\u2022" in dumped[field], f"{field} left unmasked"
+    assert "2342344234" not in dumped["national_id_number"]
+
+
+def test_inbound_schema_is_not_masked() -> None:
+    """Masking must not touch what is stored or scored."""
+    from app.schemas.score_request import ApplicantInfo
+
+    assert "field_serializer" not in ApplicantInfo.__doc__ if ApplicantInfo.__doc__ else True
+    from datetime import date
+
+    info = ApplicantInfo(
+        full_name="Ama Mensah", date_of_birth=date(2000, 1, 1), national_id_number="GHA-123456789"
+    )
+    assert info.model_dump()["national_id_number"] == "GHA-123456789"
