@@ -461,6 +461,9 @@ async def reset_password(
         user.password_hash = hash_password(body.new_password)
         user.password_reset_token = None
         user.password_reset_expires = None
+        # The user just chose this password, so any forced-change flag from an
+        # earlier system-generated credential is satisfied (VAPT finding 6).
+        user.must_change_password = False
         return SuccessResponse(message="Password reset successfully")
 
     # Check admin users
@@ -474,6 +477,7 @@ async def reset_password(
         admin.password_hash = hash_password(body.new_password)
         admin.password_reset_token = None
         admin.password_reset_expires = None
+        admin.must_change_password = False
         return SuccessResponse(message="Password reset successfully")
 
     raise AuthenticationError("Invalid or expired reset token")

@@ -269,6 +269,17 @@ def test_scoped_token_is_rejected_everywhere_but_change_password() -> None:
     assert "must_change_password = False" in change, "the flag is never cleared"
 
 
+def test_reset_password_also_clears_the_flag() -> None:
+    """Choosing a password via the reset flow satisfies the forced change too.
+
+    Otherwise a flagged user who resets their password is still handed a scoped
+    token on the next login, for a credential they chose themselves.
+    """
+    source = _login_gate_source()
+    reset = source.split('@router.post("/reset-password"')[1].split("@router.post")[0]
+    assert reset.count("must_change_password = False") == 2, "org and admin branches both needed"
+
+
 def test_change_password_covers_admins_too() -> None:
     """An admin issued a temp password must be able to clear its own flag."""
     source = _login_gate_source()
