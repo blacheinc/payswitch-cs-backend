@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 # Shared so the throttled and unthrottled paths are byte-identical to a caller.
 _RESET_SENT_MESSAGE = "If that email exists, a reset link has been sent"
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 settings = get_settings()
 
