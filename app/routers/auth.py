@@ -6,13 +6,14 @@ import logging
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from jose import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, RateLimitError
+from app.core.rate_limiter import AuthRateLimiter, client_ip
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -51,8 +52,12 @@ from app.schemas.auth import (
 )
 from app.schemas.common import SuccessResponse
 from app.services.email import email_service
+from app.storage.cache import get_redis_cache
 
 logger = logging.getLogger(__name__)
+
+# Shared so the throttled and unthrottled paths are byte-identical to a caller.
+_RESET_SENT_MESSAGE = "If that email exists, a reset link has been sent"
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 settings = get_settings()
@@ -141,15 +146,39 @@ async def get_my_permissions(
     )
 
 
+async def _auth_limiter() -> AuthRateLimiter:
+    """Build a limiter bound to Redis, or to the in-process fallback if unavailable."""
+    try:
+        client = await get_redis_cache().get_client()
+    except Exception as e:  # noqa: BLE001 — fallback window still applies
+        logger.warning("Redis unavailable for auth rate limiting (%s)", type(e).__name__)
+        client = None
+    return AuthRateLimiter(client)
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     body: LoginRequest,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> LoginResponse:
     """Authenticate via email/password. Returns JWT tokens."""
     # Emails are stored lowercase; normalize input so capitalization (e.g. a
     # phone keyboard auto-capitalizing the first letter) doesn't break login.
     email = (body.email or "").strip().lower()
+
+    # Throttle before touching the DB. Both buckets are checked so a single
+    # source cannot spray many accounts, nor many sources hammer one account.
+    limiter = await _auth_limiter()
+    window = settings.login_rate_limit_window_seconds
+    ip = client_ip(request)
+    ip_ok = await limiter.allow(f"login:ip:{ip}", settings.login_rate_limit_per_ip, window)
+    email_ok = await limiter.allow(
+        f"login:email:{email}", settings.login_rate_limit_per_email, window
+    )
+    if not (ip_ok and email_ok):
+        logger.warning("Login rate limit hit (ip=%s, email=%s)", ip, email)
+        raise RateLimitError(retry_after=window)
     # Try admin first, then org user
     admin_result = await db.execute(select(AdminUser).where(AdminUser.email == email))
     admin = admin_result.scalar_one_or_none()
@@ -171,7 +200,11 @@ async def login(
             "created_at": admin.created_at.isoformat() if admin.created_at else None,
         }
 
-        if admin.totp_enabled or admin.totp_secret:
+        # Gate on ``totp_enabled`` alone. ``totp_secret`` is written by
+        # /2fa/setup before the user confirms a code, so keying off it locks
+        # out anyone who abandons enrollment: they get prompted for a code no
+        # authenticator can produce, with no self-service way out.
+        if admin.totp_enabled:
             # Return partial token for 2FA completion
             temp_token = create_access_token(
                 admin.id,
@@ -224,7 +257,11 @@ async def login(
             "created_at": (org_user.created_at.isoformat() if org_user.created_at else None),
         }
 
-        if org_user.totp_enabled or org_user.totp_secret:
+        # Gate on ``totp_enabled`` alone. ``totp_secret`` is written by
+        # /2fa/setup before the user confirms a code, so keying off it locks
+        # out anyone who abandons enrollment: they get prompted for a code no
+        # authenticator can produce, with no self-service way out.
+        if org_user.totp_enabled:
             temp_token = create_access_token(
                 org_user.id,
                 extra_claims={"user_type": "org_user", "2fa_pending": True},
@@ -317,11 +354,28 @@ async def logout() -> SuccessResponse:
 @router.post("/forgot-password", response_model=SuccessResponse)
 async def forgot_password(
     body: ForgotPasswordRequest,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> SuccessResponse:
     """Request a password reset email. Token expires in 1 hour."""
     expiry = utcnow() + timedelta(hours=1)
     email = (body.email or "").strip().lower()
+
+    # Throttled silently: an over-limit caller gets the same response as anyone
+    # else, so this stays enumeration-safe, but no token is minted and no mail
+    # is sent. Prevents the mailbox flooding in the pentest finding.
+    limiter = await _auth_limiter()
+    window = settings.password_reset_rate_limit_window_seconds
+    ip = client_ip(request)
+    ip_ok = await limiter.allow(
+        f"pwreset:ip:{ip}", settings.password_reset_rate_limit_per_ip, window
+    )
+    email_ok = await limiter.allow(
+        f"pwreset:email:{email}", settings.password_reset_rate_limit_per_email, window
+    )
+    if not (ip_ok and email_ok):
+        logger.warning("Password reset rate limit hit (ip=%s, email=%s)", ip, email)
+        return SuccessResponse(message=_RESET_SENT_MESSAGE)
 
     # Check org users first
     result = await db.execute(select(OrgUser).where(OrgUser.email == email))
@@ -347,7 +401,7 @@ async def forgot_password(
                 callback_url=body.callback_url,
             )
     # Always return success to prevent email enumeration
-    return SuccessResponse(message="If that email exists, a reset link has been sent")
+    return SuccessResponse(message=_RESET_SENT_MESSAGE)
 
 
 @router.post("/reset-password", response_model=SuccessResponse)

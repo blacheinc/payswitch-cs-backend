@@ -173,6 +173,16 @@ class Settings(BaseSettings):
     rate_limit_per_day: int = 50_000
     rate_limit_burst: int = 200
 
+    # Unauthenticated auth endpoints (login, forgot-password). Keyed by client
+    # IP and by target email; the per-email limit is the one that actually
+    # stops a targeted brute force, since IPs rotate cheaply.
+    login_rate_limit_per_ip: int = 30
+    login_rate_limit_per_email: int = 5
+    login_rate_limit_window_seconds: int = 900
+    password_reset_rate_limit_per_ip: int = 10
+    password_reset_rate_limit_per_email: int = 3
+    password_reset_rate_limit_window_seconds: int = 3600
+
     # ── Scoring ──────────────────────────────────────────────────────────────
     scoring_timeout_seconds: int = 5
     score_validity_days: int = 14
