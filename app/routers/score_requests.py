@@ -37,6 +37,7 @@ from app.models.score_request import (
 )
 from app.models.scoring_result import ScoringDecision, ScoringResult
 from app.schemas.score_request import (
+    ApplicantPiiReveal,
     ApplicantSummary,
     CreateScoreRequestInput,
     HardStopDeclineResponse,
@@ -1099,6 +1100,57 @@ async def get_score_request(
         ),
     )
 
+
+
+@router.get("/{request_id}/applicant-pii", response_model=ApplicantPiiReveal)
+async def reveal_applicant_pii(
+    request_id: str,
+    auth: Annotated[
+        AuthContext,
+        Depends(require_any_permission("score_requests.read", "admin.score_requests.read")),
+    ],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ApplicantPiiReveal:
+    """Return the applicant's unmasked identifiers for one score request.
+
+    Everything else masks these fields (VAPT finding 9). This is the deliberate
+    exception the report asked for: a reveal that is an explicit, separate act
+    and is always recorded. Unlike the detail route, the audit write here is
+    unconditional — an org user reading their own applicant's national ID is
+    exactly what this trail needs to capture, not just cross-org admin reads.
+    """
+    query = select(ScoreRequest).where(ScoreRequest.tracking_id == request_id)
+    if auth.user_type != "admin":
+        query = query.where(ScoreRequest.organization_id == auth.organization_id)
+
+    score_req = (await db.execute(query)).scalar_one_or_none()
+    if not score_req:
+        raise NotFoundError("Score request", request_id)
+
+    from app.models.audit import AuditLog
+
+    db.add(
+        AuditLog(
+            actor_type=auth.user_type or "unknown",
+            actor_id=str(auth.user_id) if auth.user_id else None,
+            actor_email=auth.user_email,
+            organization_id=(
+                str(score_req.organization_id) if score_req.organization_id else None
+            ),
+            action="score_requests.reveal_applicant_pii",
+            resource_type="score_requests",
+            resource_id=request_id,
+            description=f"Revealed unmasked applicant identifiers for {request_id}",
+        )
+    )
+
+    applicant = (score_req.request_payload or {}).get("applicant") or {}
+    return ApplicantPiiReveal(
+        request_id=score_req.tracking_id,
+        national_id_number=applicant.get("national_id_number"),
+        phone=applicant.get("phone"),
+        account_number=applicant.get("account_number"),
+    )
 
 @router.get("/{request_id}/scoring-result", response_model=ScoringResultResponse)
 async def get_scoring_result(

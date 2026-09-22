@@ -65,6 +65,21 @@ class ApplicantSummary(BaseModel):
         return mask_national_id(value)
 
 
+class ApplicantPiiReveal(BaseModel):
+    """Unmasked applicant identifiers, returned only by the explicit reveal route.
+
+    Deliberately carries no ``field_serializer``: this is the one response that
+    is *meant* to expose full values, which is why reaching it requires a
+    separate call that is always written to ``audit_logs``. Everything else goes
+    through :class:`ApplicantSummary` and is masked.
+    """
+
+    request_id: str
+    national_id_number: str | None = None
+    phone: str | None = None
+    account_number: str | None = None
+
+
 class LoanRequestSummary(BaseModel):
     """Lightweight loan request info returned in score responses."""
 

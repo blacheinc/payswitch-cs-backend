@@ -375,3 +375,64 @@ def test_inbound_schema_is_not_masked() -> None:
         full_name="Ama Mensah", date_of_birth=date(2000, 1, 1), national_id_number="GHA-123456789"
     )
     assert info.model_dump()["national_id_number"] == "GHA-123456789"
+
+
+# ── Finding 9, follow-ups: bureau lookup + the audited reveal route ──────────
+
+
+def test_bureau_personal_details_masks_identifiers() -> None:
+    """/bureau-lookup takes `identification` as OPTIONAL.
+
+    A caller can search by name + date of birth and read the consumer's national
+    ID back, which is identifier harvesting rather than over-display. Not in the
+    VAPT report; found afterwards.
+    """
+    from app.schemas.bureau_schemas import BureauPersonalDetails
+
+    dumped = BureauPersonalDetails(
+        consumer_id="GHA-2342344234-3",
+        national_id="GHA-2342344234-3",
+        phone="+233904887364",
+    ).model_dump()
+
+    assert "\u2022" in dumped["national_id"]
+    assert "\u2022" in dumped["phone"]
+    assert "2342344234" not in dumped["national_id"]
+
+
+def test_bureau_consumer_id_is_not_masked() -> None:
+    """consumer_id is echoed back as BureauData.consumer_id when scoring.
+
+    Masking it would feed a masked value into the scoring pipeline.
+    """
+    from app.schemas.bureau_schemas import BureauPersonalDetails
+
+    dumped = BureauPersonalDetails(consumer_id="GHA-2342344234-3").model_dump()
+    assert dumped["consumer_id"] == "GHA-2342344234-3"
+
+
+def test_reveal_schema_does_not_mask() -> None:
+    """The reveal route is the one place full values are meant to surface."""
+    from app.schemas.score_request import ApplicantPiiReveal
+
+    dumped = ApplicantPiiReveal(
+        request_id="SCR-1", national_id_number="GHA-2342344234-3", phone="+233904887364"
+    ).model_dump()
+    assert dumped["national_id_number"] == "GHA-2342344234-3"
+    assert dumped["phone"] == "+233904887364"
+
+
+def test_reveal_route_always_audits() -> None:
+    """The audit write must be unconditional, not admin-only like the detail route."""
+    from pathlib import Path
+
+    src = Path("app/routers/score_requests.py").read_text(encoding="utf-8")
+    block = src.split('@router.get("/{request_id}/applicant-pii"')[1].split("@router.")[0]
+
+    assert "AuditLog(" in block
+    assert "score_requests.reveal_applicant_pii" in block
+    # An `if auth.user_type == "admin"` guard around the audit would mean org
+    # users could read full identifiers leaving no trace.
+    assert 'if auth.user_type == "admin"' not in block
+    # Non-admins must still be scoped to their own organisation.
+    assert 'if auth.user_type != "admin"' in block

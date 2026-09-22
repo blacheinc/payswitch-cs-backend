@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
+
+from app.core.masking import mask_national_id, mask_phone
 
 # ── Bureau Lookup Request ───────────────────────────────────────────────────
 
@@ -119,7 +121,17 @@ class BureauMetadata(BaseModel):
 
 
 class BureauPersonalDetails(BaseModel):
-    """Personal details from the XDS report, displayed to the user."""
+    """Personal details from the XDS report, displayed to the user.
+
+    ``national_id`` and ``phone`` are masked on serialization. This endpoint
+    takes ``identification`` as *optional*, so a caller can search by name plus
+    date of birth and read the consumer's national ID back out — identifier
+    harvesting, not just over-display. Masking here closes that.
+
+    ``consumer_id`` is deliberately left intact: it is the value the front-end
+    echoes back as ``BureauData.consumer_id`` when creating a score request, so
+    masking it would break scoring.
+    """
 
     consumer_id: str | None = None
     first_name: str | None = None
@@ -134,6 +146,14 @@ class BureauPersonalDetails(BaseModel):
     address: str | None = None
     marital_status: str | None = None
     dependants: str | None = None
+
+    @field_serializer("national_id")
+    def _mask_national_id(self, value: str | None) -> str | None:
+        return mask_national_id(value)
+
+    @field_serializer("phone")
+    def _mask_phone(self, value: str | None) -> str | None:
+        return mask_phone(value)
 
 
 class BureauCreditSummary(BaseModel):
