@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.exceptions import AuthenticationError, RateLimitError
+from app.core.exceptions import (
+    AuthenticationError,
+    ConflictError,
+    RateLimitError,
+    ReauthenticationRequiredError,
+)
 from app.core.rate_limiter import AuthRateLimiter, client_ip
 from app.core.security import (
     create_access_token,
@@ -528,9 +533,10 @@ async def setup_2fa(
                 "[2fa] Rejected re-enrollment without re-authentication for %s",
                 current_user.email,
             )
-            raise AuthenticationError(
+            raise ReauthenticationRequiredError(
                 "Two-factor authentication is already enabled. "
-                "Provide your current authenticator code or password to replace it."
+                "Provide your current authenticator code or password to replace it.",
+                details={"reason": "2fa_already_enabled"},
             )
 
     secret = generate_totp_secret()
@@ -636,13 +642,17 @@ async def remove_2fa(
     user = result.scalar_one()
 
     if not user.totp_enabled and not user.totp_secret:
-        raise AuthenticationError("2FA is not enabled on this account")
+        raise ConflictError("2FA is not enabled on this account")
 
     if not verify_password(body.password, user.password_hash):
-        raise AuthenticationError("Incorrect password")
+        raise ReauthenticationRequiredError(
+            "Incorrect password", details={"reason": "bad_password"}
+        )
 
     if user.totp_secret and not verify_totp(user.totp_secret, body.code):
-        raise AuthenticationError("Invalid 2FA code")
+        raise ReauthenticationRequiredError(
+            "Invalid 2FA code", details={"reason": "bad_totp_code"}
+        )
 
     user.totp_secret = None
     user.totp_enabled = False

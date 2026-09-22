@@ -221,7 +221,11 @@ def test_2fa_setup_requires_reauth_when_already_enabled() -> None:
     assert "current_user.totp_enabled" in setup, "setup does not branch on existing 2FA"
     assert "verify_totp(" in setup, "current TOTP code is not accepted as re-auth"
     assert "verify_password(" in setup, "current password is not accepted as re-auth"
-    assert "AuthenticationError" in setup, "re-enrollment is not refused without re-auth"
+    assert "ReauthenticationRequiredError" in setup, "re-enrollment is not refused"
+    # Must NOT be 401: clients treat that as a dead session and redirect to
+    # login, so a signed-in user gets bounced for what is really a prompt to
+    # re-enter their code.
+    assert "AuthenticationError(" not in setup
     # The secret must only be minted after the re-auth branch.
     assert setup.index("current_user.totp_enabled") < setup.index("generate_totp_secret()")
 
@@ -436,3 +440,29 @@ def test_reveal_route_always_audits() -> None:
     assert 'if auth.user_type == "admin"' not in block
     # Non-admins must still be scoped to their own organisation.
     assert 'if auth.user_type != "admin"' in block
+
+
+def test_step_up_failures_are_not_401() -> None:
+    """2FA credential failures must not look like an expired session.
+
+    Every client we have treats 401 as "refresh the token, then log out if that
+    fails". Returning 401 for a wrong TOTP code therefore signs the user out
+    instead of letting them retry. 403 + REAUTH_REQUIRED is handleable without
+    each client special-casing the URL.
+    """
+    from app.core.exceptions import ReauthenticationRequiredError
+
+    err = ReauthenticationRequiredError("nope")
+    assert err.status_code == 403
+    assert err.error_code == "REAUTH_REQUIRED"
+
+
+def test_remove_2fa_uses_the_right_statuses() -> None:
+    source = _login_gate_source()
+    remove = source.split('@router.post("/2fa/remove"')[1].split("@router.post")[0]
+
+    # Wrong password / wrong code are step-up failures, not session failures.
+    assert remove.count("ReauthenticationRequiredError") == 2
+    # "2FA is not enabled" is a state conflict, not an auth problem at all.
+    assert "ConflictError(" in remove
+    assert "AuthenticationError(" not in remove

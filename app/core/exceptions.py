@@ -76,6 +76,27 @@ class AuthenticationError(AppError):
         )
 
 
+class ReauthenticationRequiredError(AppError):
+    """A step-up credential is needed for this specific action.
+
+    Deliberately **not** 401. The caller's session is perfectly valid; they just
+    have not proven control of a second factor for this one operation. Clients
+    almost universally treat 401 as "session is dead" — refresh the token, and on
+    failure redirect to login — so returning 401 here bounces a signed-in user to
+    the login screen for what is really a prompt to re-enter their code. 403 plus
+    a distinct ``REAUTH_REQUIRED`` code lets any client handle it without having
+    to special-case the URL.
+    """
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
+        super().__init__(
+            message=message,
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_code="REAUTH_REQUIRED",
+            details=details,
+        )
+
+
 class AuthorizationError(AppError):
     """Authorization failed (authenticated but lacking permissions)."""
 
