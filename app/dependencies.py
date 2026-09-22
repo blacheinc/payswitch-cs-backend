@@ -15,6 +15,7 @@ from app.core.exceptions import (
     AuthenticationError,
     AuthorizationError,
     OrganizationSuspendedError,
+    PasswordChangeRequiredError,
     RateLimitError,
 )
 from app.core.rate_limiter import RateLimiter
@@ -152,7 +153,10 @@ async def get_current_user(
     # endpoint at once, so the emailed credential cannot reach real functionality
     # (VAPT finding 6). /auth/change-password uses get_user_pending_password_change.
     if payload.get("pwd_change_required"):
-        raise AuthenticationError("Password change required before continuing")
+        # 403, not 401: the token is valid and the client must *route* the user
+        # to the change-password screen. A 401 would trip the usual
+        # refresh-then-logout path and strand them with no way to clear the flag.
+        raise PasswordChangeRequiredError()
 
     user_type = payload.get("user_type")
     user_id = payload.get("sub")
@@ -261,7 +265,9 @@ async def get_auth_context(
         if org is None or org.status == OrgStatus.SUSPENDED:
             raise OrganizationSuspendedError()
         if org.status != OrgStatus.ACTIVE:
-            raise AuthenticationError("Organization is not active")
+            # Authorization state, not a credential problem — the API key is
+            # valid, the org just is not permitted to transact.
+            raise AuthorizationError("Organization is not active")
 
         # Update last_used_at
         from app.db.base import utcnow

@@ -97,6 +97,23 @@ class ReauthenticationRequiredError(AppError):
         )
 
 
+class PasswordChangeRequiredError(AppError):
+    """The session is valid but scoped to the change-password flow.
+
+    Same reasoning as :class:`ReauthenticationRequiredError`: 401 would make
+    clients refresh-then-logout, which would strand the user — they are supposed
+    to be *sent* to the change-password screen, and cannot reach it if the
+    response signs them out first.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Password change required before continuing",
+            status_code=status.HTTP_403_FORBIDDEN,
+            error_code="PASSWORD_CHANGE_REQUIRED",
+        )
+
+
 class AuthorizationError(AppError):
     """Authorization failed (authenticated but lacking permissions)."""
 

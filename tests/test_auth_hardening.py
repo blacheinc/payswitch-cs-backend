@@ -466,3 +466,24 @@ def test_remove_2fa_uses_the_right_statuses() -> None:
     # "2FA is not enabled" is a state conflict, not an auth problem at all.
     assert "ConflictError(" in remove
     assert "AuthenticationError(" not in remove
+
+
+def test_password_change_gate_is_not_401() -> None:
+    """A change-password-scoped token must not read as a dead session.
+
+    401 would send the client down refresh-then-logout, stranding the user: the
+    whole point is to *route* them to the change-password screen, which they
+    cannot reach if the response signs them out first.
+    """
+    from pathlib import Path
+
+    from app.core.exceptions import PasswordChangeRequiredError
+
+    err = PasswordChangeRequiredError()
+    assert err.status_code == 403
+    assert err.error_code == "PASSWORD_CHANGE_REQUIRED"
+
+    deps = Path("app/dependencies.py").read_text(encoding="utf-8")
+    guard = deps.split('if payload.get("pwd_change_required"):')[1].split("\n\n")[0]
+    assert "PasswordChangeRequiredError" in guard
+    assert "AuthenticationError" not in guard
