@@ -48,8 +48,9 @@ class EmailService:
                 # here, any delivery question can be traced straight to the
                 # provider's own record for that message.
                 logger.info(
-                    "[email] Sent '%s' to %s via Resend (id=%s)",
+                    "[email] Sent '%s' from %s to %s via Resend (id=%s)",
                     subject,
+                    self.settings.email_from,
                     to_email,
                     (resp or {}).get("id") if isinstance(resp, dict) else resp,
                 )
