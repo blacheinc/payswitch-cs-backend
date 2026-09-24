@@ -40,7 +40,20 @@ class EmailService:
                     "subject": subject,
                     "html": html_content,
                 }
-                return resend.Emails.send(params)
+                resp = resend.Emails.send(params)
+                # Log the provider's message id. A successful send used to be
+                # completely silent, which made "no email arrived" impossible to
+                # triage: there was no way to tell a send we never attempted
+                # from one the provider accepted and then dropped. With the id
+                # here, any delivery question can be traced straight to the
+                # provider's own record for that message.
+                logger.info(
+                    "[email] Sent '%s' to %s via Resend (id=%s)",
+                    subject,
+                    to_email,
+                    (resp or {}).get("id") if isinstance(resp, dict) else resp,
+                )
+                return resp
             except Exception as e:
                 logger.warning(
                     "[email] Failed to send '%s' to %s via Resend: %s",
